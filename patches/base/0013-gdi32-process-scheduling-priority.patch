@@ -1,0 +1,58 @@
+Subject: gdi32: take a process GPU scheduling priority
+
+OBS Studio 33 sets its GPU priority with
+D3DKMTSetProcessSchedulingPriorityClass when it starts and aborts when
+gdi32 does not export it. There is no GPU scheduler to tell, so the
+value is taken and the normal class is reported back.
+---
+diff --git a/dlls/gdi32/gdi32.spec b/dlls/gdi32/gdi32.spec
+--- a/dlls/gdi32/gdi32.spec
++++ b/dlls/gdi32/gdi32.spec
+@@ -137,12 +137,14 @@
+ @ stdcall D3DKMTOpenSyncObjectNtHandleFromName(ptr) win32u.NtGdiDdDDIOpenSyncObjectNtHandleFromName
+ @ stdcall D3DKMTOpenSynchronizationObject(ptr) win32u.NtGdiDdDDIOpenSynchronizationObject
+ @ stdcall D3DKMTQueryAdapterInfo(ptr) win32u.NtGdiDdDDIQueryAdapterInfo
++@ stdcall D3DKMTGetProcessSchedulingPriorityClass(long ptr)
+ @ stdcall D3DKMTQueryResourceInfo(ptr) win32u.NtGdiDdDDIQueryResourceInfo
+ @ stdcall D3DKMTQueryResourceInfoFromNtHandle(ptr) win32u.NtGdiDdDDIQueryResourceInfoFromNtHandle
+ @ stdcall D3DKMTQueryStatistics(ptr) win32u.NtGdiDdDDIQueryStatistics
+ @ stdcall D3DKMTQueryVideoMemoryInfo(ptr) win32u.NtGdiDdDDIQueryVideoMemoryInfo
+ @ stdcall D3DKMTReleaseKeyedMutex(ptr) win32u.NtGdiDdDDIReleaseKeyedMutex
+ @ stdcall D3DKMTReleaseKeyedMutex2(ptr) win32u.NtGdiDdDDIReleaseKeyedMutex2
++@ stdcall D3DKMTSetProcessSchedulingPriorityClass(long long)
+ @ stdcall D3DKMTSetQueuedLimit(ptr) win32u.NtGdiDdDDISetQueuedLimit
+ @ stdcall D3DKMTSetVidPnSourceOwner(ptr) win32u.NtGdiDdDDISetVidPnSourceOwner
+ @ stdcall D3DKMTShareObjects(long ptr ptr long ptr) win32u.NtGdiDdDDIShareObjects
+diff --git a/dlls/gdi32/objects.c b/dlls/gdi32/objects.c
+--- a/dlls/gdi32/objects.c
++++ b/dlls/gdi32/objects.c
+@@ -896,6 +896,29 @@
+     return NtUserD3DKMTOpenAdapterFromGdiDisplayName( desc );
+ }
+ 
++/******************************************************************************
++ *		D3DKMTSetProcessSchedulingPriorityClass [GDI32.@]
++ *
++ * Streaming and recording programs (OBS Studio) raise their GPU priority at
++ * start and stop if the call is missing; there is no GPU scheduler to tell.
++ */
++NTSTATUS WINAPI D3DKMTSetProcessSchedulingPriorityClass( HANDLE process, int priority )
++{
++    FIXME( "(%p, %d) stub\n", process, priority );
++    return STATUS_SUCCESS;
++}
++
++/******************************************************************************
++ *		D3DKMTGetProcessSchedulingPriorityClass [GDI32.@]
++ */
++NTSTATUS WINAPI D3DKMTGetProcessSchedulingPriorityClass( HANDLE process, int *priority )
++{
++    FIXME( "(%p, %p) stub\n", process, priority );
++    if (!priority) return STATUS_INVALID_PARAMETER;
++    *priority = 2; /* D3DKMT_SCHEDULINGPRIORITYCLASS_NORMAL */
++    return STATUS_SUCCESS;
++}
++
+ /***********************************************************************
+  *           SetObjectOwner    (GDI32.@)
+  */

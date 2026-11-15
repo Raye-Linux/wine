@@ -1,0 +1,10 @@
+# Applied in this order by build.sh, after base/, one file name per line.
+0001-default-device-names.patch
+0002-stereo-mix.patch
+0003-asio-driver.patch
+0004-exclusive-mode.patch
+0005-midi-mapper-name.patch
+0006-midi-in-failed-connect.patch
+0007-hide-pipewire-midi-bridge.patch
+0008-midi-port-names.patch
+0009-asio-sample-rate.patch

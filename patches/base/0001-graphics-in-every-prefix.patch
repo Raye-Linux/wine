@@ -1,0 +1,82 @@
+Subject: wine.inf: Direct3D on Vulkan in every prefix
+
+Every new or updated prefix gets DXVK (Direct3D 8 to 11), VKD3D-Proton
+(Direct3D 12) and NVAPI from share/wine/raye, and DLL overrides that use
+them first. Values a person changed are kept. NVAPI starts disabled; the
+launcher turns it on for NVIDIA cards.
+---
+diff --git a/loader/wine.inf.in b/loader/wine.inf.in
+index 9288b58..d6fa053 100644
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -94,7 +94,9 @@ AddReg=\
+ [DefaultInstall.ntamd64]
+ Needs=BaseInstall
+ WineFakeDlls=FakeDllsWin64
++CopyFiles=RayeGraphics64
+ AddReg=\
++    RayeGraphics,\
+     CurrentVersionWow64.ntamd64,\
+     VCRuntime.ntamd64,\
+     VersionInfo
+@@ -123,6 +125,7 @@ AddReg=\
+ 
+ [Wow64Install.ntx86]
+ Needs=BaseWow64Install
++CopyFiles=RayeGraphics32
+ AddReg=\
+     CurrentVersionWow64.ntx86,\
+     VCRuntime.ntamd64,\
+@@ -1345,13 +1348,52 @@ windows.system.winmd
+ windows.ui.winmd
+ windows.ui.xaml.winmd
+ 
++; Direct3D 8 to 11 (DXVK) and 12 (VKD3D-Proton) on Vulkan, and NVAPI, in
++; every prefix. The Raye launcher switches Direct3D back to the builtin
++; DLLs when the computer has no usable Vulkan, and turns NVAPI on for
++; NVIDIA cards. NOCLOBBER keeps what a person set by hand.
++[RayeGraphics64]
++d3d8.dll
++d3d9.dll
++d3d10core.dll
++d3d11.dll
++dxgi.dll
++d3d12.dll
++d3d12core.dll
++nvapi64.dll
++
++[RayeGraphics32]
++d3d8.dll
++d3d9.dll
++d3d10core.dll
++d3d11.dll
++dxgi.dll
++d3d12.dll
++d3d12core.dll
++nvapi.dll
++
++[RayeGraphics]
++HKCU,Software\Wine\DllOverrides,"d3d8",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"d3d9",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"d3d10core",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"d3d11",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"dxgi",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"d3d12",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"d3d12core",2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"nvapi",2,""
++HKCU,Software\Wine\DllOverrides,"nvapi64",2,""
++
+ [WineSourceDirs]
+ NlsFiles  = nls
++RayeGraphics64 = raye\x86_64-windows
++RayeGraphics32 = raye\i386-windows
+ SortFiles = nls
+ WinmdFiles = winmd,include
+ 
+ [DestinationDirs]
+ ColorFiles = 23
++RayeGraphics64 = 11
++RayeGraphics32 = 11
+ EtcFiles  = 12,etc
+ InfFiles  = 17
+ NlsFiles  = 11

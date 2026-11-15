@@ -1,0 +1,42 @@
+Subject: winealsa: hide PipeWire's own sequencer clients
+
+On a PipeWire system the MIDI lists showed "PipeWire-System" and
+"PipeWire-RT-Event" as inputs and outputs. They are the bridge into
+PipeWire's graph, Windows has nothing like them, and FL Studio marked
+both inputs as failing. Real devices keep their own clients.
+---
+diff --git a/dlls/winealsa.drv/alsamidi.c b/dlls/winealsa.drv/alsamidi.c
+index b1f3b96..aa4d4cd 100644
+--- a/dlls/winealsa.drv/alsamidi.c
++++ b/dlls/winealsa.drv/alsamidi.c
+@@ -413,6 +413,14 @@ static void port_add(snd_seq_client_info_t* cinfo, snd_seq_port_info_t* pinfo, u
+     }
+ }
+ 
++/* PipeWire's own sequencer clients carry events into its graph. Windows has
++ * nothing like them, and opening them as a MIDI device fails. */
++static BOOL is_hidden_client(snd_seq_client_info_t *cinfo)
++{
++    const char *name = snd_seq_client_info_get_name(cinfo);
++    return !strcmp(name, "PipeWire-System") || !strcmp(name, "PipeWire-RT-Event");
++}
++
+ static UINT alsa_midi_init(void)
+ {
+     static BOOL init_done;
+@@ -436,6 +444,7 @@ static UINT alsa_midi_init(void)
+     /* First, search for all internal midi devices */
+     snd_seq_client_info_set_client(cinfo, -1);
+     while (snd_seq_query_next_client(seq, cinfo) >= 0) {
++        if (is_hidden_client(cinfo)) continue;
+         snd_seq_port_info_set_client(pinfo, snd_seq_client_info_get_client(cinfo));
+         snd_seq_port_info_set_port(pinfo, -1);
+         while (snd_seq_query_next_port(seq, pinfo) >= 0) {
+@@ -449,6 +458,7 @@ static UINT alsa_midi_init(void)
+     /* Second, search for all external ports */
+     snd_seq_client_info_set_client(cinfo, -1);
+     while (snd_seq_query_next_client(seq, cinfo) >= 0) {
++        if (is_hidden_client(cinfo)) continue;
+         snd_seq_port_info_set_client(pinfo, snd_seq_client_info_get_client(cinfo));
+         snd_seq_port_info_set_port(pinfo, -1);
+         while (snd_seq_query_next_port(seq, pinfo) >= 0) {

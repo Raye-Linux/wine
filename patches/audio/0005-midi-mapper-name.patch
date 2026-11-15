@@ -1,0 +1,19 @@
+Subject: midimap: name the MIDI mapper the way Windows does
+
+midiOutGetDevCaps on MIDI_MAPPER gave "Wine midi mapper", which music
+programs show as the first MIDI output (FL Studio's MIDI settings list
+it at the top). Windows calls it "Microsoft MIDI Mapper", which is also
+what FL Studio already prints in its description column.
+---
+diff --git a/dlls/midimap/midimap.c b/dlls/midimap/midimap.c
+--- a/dlls/midimap/midimap.c
++++ b/dlls/midimap/midimap.c
+@@ -506,7 +506,7 @@
+ {
+     static const MIDIOUTCAPSW mappercaps = {
+ 	0x00FF, 0x0001, 0x0100, /* Manufacturer and Product ID */
+-        L"Wine midi mapper", MOD_MAPPER, 0, 0, 0xFFFF,
++        L"Microsoft MIDI Mapper", MOD_MAPPER, 0, 0, 0xFFFF,
+ 	/* Native returns volume caps of underlying device + MIDICAPS_STREAM */
+ 	MIDICAPS_VOLUME|MIDICAPS_LRVOLUME
+     };

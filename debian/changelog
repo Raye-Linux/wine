@@ -1,0 +1,48 @@
+raye-wine (11.21-1~raye4) resolute; urgency=medium
+
+  * Ship the layer in six parts (32-bit side, .NET, web views for 64-bit
+    and 32-bit programs, Direct3D on Vulkan) so no package is over 90 MB.
+
+ -- techoraye <190692880+techoraye@users.noreply.github.com>  Fri, 13 Nov 2026 12:38:42 +0000
+
+raye-wine (11.21-1~raye3) resolute; urgency=medium
+
+  * Windows programs no longer bring up the screen share picker on their
+    own. It comes after a click or a key in the program, within 5 seconds,
+    from a menu item or a global hotkey, or when the program keeps reading
+    the screen like a recorder. Discord and Roblox Studio start without it.
+  * Screen capture works with Plasma's share picker: one source is asked
+    for, and a whole-desktop share gives each screen its own part.
+  * OBS Studio 33 for Windows starts and records.
+  * The MIDI mapper is called Microsoft MIDI Mapper, PipeWire's own MIDI
+    bridge is no longer listed, and an input that fails to connect is not
+    left marked as in use.
+  * crypt32 answers a certificate's SHA-256 thumbprint (Paint.NET's
+    installer asks for it).
+  * The mouse, keyboard, ACM codecs, DirectDraw devices, MCI players, the
+    C++ runtime error box and WMI devices no longer show the old project
+    name.
+  * Ships raye-windows-titles, the per-title answers and the Roblox
+    profiles; it says before anything runs that the Windows Minecraft
+    launcher and Bedrock can't work, and points to Java in the Store.
+  * New raye-wine-compat, which gives winetricks the wine it asks for.
+  * Raye ASIO switches the sound to 44.1 kHz when a program asks for it,
+    FL Studio's default, and PipeWire may run at 44.1 or 48 kHz.
+  * Depends on PipeWire's JACK library and the GStreamer plugins Windows
+    programs play media through.
+  * Direct2D custom effects work and color contexts are made instead of
+    refused, so Paint.NET's installer gets past its graphics check.
+  * A hidden window stays hidden when the window manager answers late.
+  * Roblox Studio runs with mimalloc in place of malloc.
+
+ -- techoraye <190692880+techoraye@users.noreply.github.com>  Thu, 12 Nov 2026 20:38:14 +0000
+
+raye-wine (11.21-1~raye1) resolute; urgency=medium
+
+  * First build: Wine 11.21 with the Raye patches, in /opt/raye-wine.
+    WoW64 runs 32-bit programs without any 32-bit system library. DXVK
+    3.1.1, VKD3D-Proton 3.1 and DXVK-NVAPI 0.9.3 in every prefix, Wine
+    Mono 11.3.0 and Wine Gecko 2.47.4 shipped. Users see "Windows
+    programs", never the project name.
+
+ -- techoraye <190692880+techoraye@users.noreply.github.com>  Mon, 02 Nov 2026 01:00:00 -0500

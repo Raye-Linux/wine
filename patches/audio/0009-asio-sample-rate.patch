@@ -1,0 +1,349 @@
+Subject: rayeasio: switch PipeWire to the rate the host asks for
+
+A host that opens its project at 44.1 kHz, FL Studio's default, was
+refused with ASE_NoClock whenever the graph ran at 48 kHz. PipeWire's
+JACK library takes the wanted rate from PIPEWIRE_RATE when the client
+connects, and the graph follows once that client is active and nothing
+else plays at another rate. SetSampleRate reconnects with the rate,
+activates for a moment to see the graph follow, and gives up (with the
+old connection back) when it does not. With buffers made, the graph side
+is released and prepared again on the same buffers. Only the rates the
+PipeWire setting of raye-wine allows are offered.
+---
+diff --git a/dlls/rayeasio/asio.c b/dlls/rayeasio/asio.c
+index 17b9d58..dcb4b8f 100644
+--- a/dlls/rayeasio/asio.c
++++ b/dlls/rayeasio/asio.c
+@@ -483,13 +483,27 @@ static LONG __thiscall asio_get_buffer_size(struct asio_driver *driver, LONG *mi
+     return ASE_OK;
+ }
+ 
++/* The rates raye-wine's PipeWire setting lets a program pick
++ * (pipewire.conf.d/50-raye-rates.conf). */
++static const UINT32 graph_rates[] = { 44100, 48000 };
++
++static BOOL graph_rate(double rate)
++{
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE(graph_rates); i++)
++        if (rate == graph_rates[i]) return TRUE;
++    return FALSE;
++}
++
+ DEFINE_THISCALL_WRAPPER(asio_can_sample_rate, 12)
+ static LONG __thiscall asio_can_sample_rate(struct asio_driver *driver, double rate)
+ {
+     TRACE("%f, running at %u\n", rate, driver->sample_rate);
+ 
+     if (driver->state == STATE_LOADED) return ASE_NotPresent;
+-    return rate == driver->sample_rate ? ASE_OK : ASE_NoClock;
++    if (rate == driver->sample_rate) return ASE_OK;
++    return graph_rate(rate) && driver->state != STATE_RUNNING ? ASE_OK : ASE_NoClock;
+ }
+ 
+ DEFINE_THISCALL_WRAPPER(asio_get_sample_rate, 8)
+@@ -501,14 +515,60 @@ static LONG __thiscall asio_get_sample_rate(struct asio_driver *driver, double *
+     return ASE_OK;
+ }
+ 
++/* Hands the host's buffers to the graph side and activates it. */
++static BOOL unix_prepare(struct asio_driver *driver)
++{
++    struct asio_prepare_params params = { driver->handle };
++    unsigned int i;
++
++    for (i = 0; i < driver->inputs; i++)
++        if (driver->input_mask & (1u << i))
++        {
++            params.inputs[i][0] = (ULONG_PTR)driver->in_bufs[i];
++            params.inputs[i][1] = (ULONG_PTR)(driver->in_bufs[i] + driver->frames);
++        }
++    for (i = 0; i < driver->outputs; i++)
++        if (driver->output_mask & (1u << i))
++        {
++            params.outputs[i][0] = (ULONG_PTR)driver->out_bufs[i];
++            params.outputs[i][1] = (ULONG_PTR)(driver->out_bufs[i] + driver->frames);
++        }
++    params.frames = driver->frames;
++    params.input_mask = driver->input_mask;
++    params.output_mask = driver->output_mask;
++    return !UNIX_CALL(asio_prepare, &params) && !params.result;
++}
++
+ DEFINE_THISCALL_WRAPPER(asio_set_sample_rate, 12)
+ static LONG __thiscall asio_set_sample_rate(struct asio_driver *driver, double rate)
+ {
++    struct asio_rate_params params = { 0 };
++
+     TRACE("%f, running at %u\n", rate, driver->sample_rate);
+ 
+     if (driver->state == STATE_LOADED) return ASE_NotPresent;
+     /* 0 asks for an external clock, which is the graph's anyway */
+-    return rate == 0.0 || rate == driver->sample_rate ? ASE_OK : ASE_NoClock;
++    if (rate == 0.0 || rate == driver->sample_rate) return ASE_OK;
++    if (!graph_rate(rate) || driver->state == STATE_RUNNING) return ASE_NoClock;
++
++    params.handle = driver->handle;
++    params.rate = rate;
++    if (driver->state == STATE_PREPARED)
++    {
++        /* The buffers stay the host's; only the graph side is redone. */
++        struct asio_handle_params release = { driver->handle };
++
++        UNIX_CALL(asio_release, &release);
++        UNIX_CALL(asio_set_rate, &params);
++        driver->sample_rate = params.sample_rate;
++        if (!unix_prepare(driver)) return ASE_HWMalfunction;
++    }
++    else
++    {
++        UNIX_CALL(asio_set_rate, &params);
++        driver->sample_rate = params.sample_rate;
++    }
++    return params.result ? ASE_NoClock : ASE_OK;
+ }
+ 
+ DEFINE_THISCALL_WRAPPER(asio_get_clock_sources, 12)
+@@ -567,7 +627,6 @@ DEFINE_THISCALL_WRAPPER(asio_create_buffers, 20)
+ static LONG __thiscall asio_create_buffers(struct asio_driver *driver, struct asio_buffer_info *info,
+                                        LONG count, LONG frames, struct asio_callbacks *callbacks)
+ {
+-    struct asio_prepare_params params = { driver->handle };
+     UINT32 in_mask = 0, out_mask = 0;
+     unsigned int i;
+     float *buf;
+@@ -606,16 +665,6 @@ static LONG __thiscall asio_create_buffers(struct asio_driver *driver, struct as
+ 
+         info[i].buffers[0] = start;
+         info[i].buffers[1] = start + frames;
+-        if (info[i].is_input)
+-        {
+-            params.inputs[info[i].channel][0] = (ULONG_PTR)start;
+-            params.inputs[info[i].channel][1] = (ULONG_PTR)(start + frames);
+-        }
+-        else
+-        {
+-            params.outputs[info[i].channel][0] = (ULONG_PTR)start;
+-            params.outputs[info[i].channel][1] = (ULONG_PTR)(start + frames);
+-        }
+     }
+ 
+     driver->callbacks = callbacks;
+@@ -626,10 +675,7 @@ static LONG __thiscall asio_create_buffers(struct asio_driver *driver, struct as
+     driver->report_overload = send_message(driver, kAsioSelectorSupported, kAsioOverload);
+     memset(&driver->time, 0, sizeof(driver->time));
+ 
+-    params.frames = frames;
+-    params.input_mask = in_mask;
+-    params.output_mask = out_mask;
+-    if (UNIX_CALL(asio_prepare, &params) || params.result)
++    if (!unix_prepare(driver))
+     {
+         VirtualFree(driver->buffers, 0, MEM_RELEASE);
+         driver->buffers = NULL;
+diff --git a/dlls/rayeasio/jack.c b/dlls/rayeasio/jack.c
+index b82e206..deb0521 100644
+--- a/dlls/rayeasio/jack.c
++++ b/dlls/rayeasio/jack.c
+@@ -122,6 +122,8 @@ DBUS_FUNCS
+ struct asio_client
+ {
+     jack_client_t *jack;
++    char name[64];
++    UINT32 rate;            /* the rate asked of PipeWire, 0 for its own */
+     unsigned int inputs, outputs;
+     jack_port_t *in_ports[ASIO_MAX_CHANNELS];
+     jack_port_t *out_ports[ASIO_MAX_CHANNELS];
+@@ -396,33 +398,40 @@ static unsigned int default_channels(jack_client_t *jack, BOOL capture)
+     return n;
+ }
+ 
+-static NTSTATUS asio_open(void *args)
++/* PipeWire's JACK library reads PIPEWIRE_RATE when a client connects:
++ * that is the only way to ask the graph for another clock rate. */
++static pthread_mutex_t env_lock = PTHREAD_MUTEX_INITIALIZER;
++
++static jack_client_t *open_jack(const char *name, UINT32 rate)
+ {
+-    struct asio_open_params *params = args;
+-    struct asio_client *client;
+-    char name[16];
+-    unsigned int i;
++    jack_client_t *jack;
++    char value[32], *old = NULL;
++    const char *cur;
+     int status;
+ 
+-    params->result = STATUS_UNSUCCESSFUL;
+-    if (!load_jack()) return STATUS_SUCCESS;
+-    if (!(client = calloc(1, sizeof(*client)))) return STATUS_SUCCESS;
+-
+-    /* The buffer size is forced on the graph when the host creates its
+-     * buffers, so nothing to ask for here. */
+-    if (!(client->jack = pjack_client_open(params->client_name, JackNoStartServer, &status)))
++    pthread_mutex_lock(&env_lock);
++    if ((cur = getenv("PIPEWIRE_RATE"))) old = strdup(cur);
++    if (rate)
+     {
+-        WARN("could not open a client, status %#x\n", status);
+-        free(client);
+-        return STATUS_SUCCESS;
++        snprintf(value, sizeof(value), "1/%u", rate);
++        setenv("PIPEWIRE_RATE", value, 1);
+     }
++    jack = pjack_client_open(name, JackNoStartServer, &status);
++    if (rate)
++    {
++        if (old) setenv("PIPEWIRE_RATE", old, 1);
++        else unsetenv("PIPEWIRE_RATE");
++    }
++    pthread_mutex_unlock(&env_lock);
++    free(old);
++    if (!jack) WARN("could not open a client, status %#x\n", status);
++    return jack;
++}
+ 
+-    client->inputs = params->inputs;
+-    client->outputs = params->outputs;
+-    if (!client->inputs) client->inputs = max(2, default_channels(client->jack, TRUE));
+-    if (!client->outputs) client->outputs = max(2, default_channels(client->jack, FALSE));
+-    client->inputs = min(client->inputs, ASIO_MAX_CHANNELS);
+-    client->outputs = min(client->outputs, ASIO_MAX_CHANNELS);
++static void register_ports(struct asio_client *client)
++{
++    char name[16];
++    unsigned int i;
+ 
+     for (i = 0; i < client->inputs; i++)
+     {
+@@ -439,6 +448,46 @@ static NTSTATUS asio_open(void *args)
+     pjack_set_buffer_size_callback(client->jack, buffer_size_cb, client);
+     pjack_set_sample_rate_callback(client->jack, sample_rate_cb, client);
+     pjack_set_latency_callback(client->jack, latency_cb, client);
++}
++
++/* A new connection asking for `rate`, in place of the current one. */
++static BOOL reconnect(struct asio_client *client, UINT32 rate)
++{
++    jack_client_t *jack;
++
++    if (!(jack = open_jack(client->name, rate))) return FALSE;
++    pjack_client_close(client->jack);
++    client->jack = jack;
++    client->rate = rate;
++    register_ports(client);
++    return TRUE;
++}
++
++static NTSTATUS asio_open(void *args)
++{
++    struct asio_open_params *params = args;
++    struct asio_client *client;
++
++    params->result = STATUS_UNSUCCESSFUL;
++    if (!load_jack()) return STATUS_SUCCESS;
++    if (!(client = calloc(1, sizeof(*client)))) return STATUS_SUCCESS;
++
++    /* The buffer size is forced on the graph when the host creates its
++     * buffers, so nothing to ask for here. */
++    snprintf(client->name, sizeof(client->name), "%.*s", (int)sizeof(params->client_name) - 1, params->client_name);
++    if (!(client->jack = open_jack(client->name, 0)))
++    {
++        free(client);
++        return STATUS_SUCCESS;
++    }
++
++    client->inputs = params->inputs;
++    client->outputs = params->outputs;
++    if (!client->inputs) client->inputs = max(2, default_channels(client->jack, TRUE));
++    if (!client->outputs) client->outputs = max(2, default_channels(client->jack, FALSE));
++    client->inputs = min(client->inputs, ASIO_MAX_CHANNELS);
++    client->outputs = min(client->outputs, ASIO_MAX_CHANNELS);
++    register_ports(client);
+     pthread_mutex_init(&client->follow_lock, NULL);
+     pthread_cond_init(&client->follow_cond, NULL);
+ 
+@@ -453,6 +502,40 @@ static NTSTATUS asio_open(void *args)
+     return STATUS_SUCCESS;
+ }
+ 
++/* The graph only changes its clock while the client is active, and only
++ * when nothing else plays at another rate; so try it, briefly, before the
++ * host makes its buffers. */
++static NTSTATUS asio_set_rate(void *args)
++{
++    struct asio_rate_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++    unsigned int waited;
++    UINT32 old = client->rate;
++    BOOL ok = FALSE;
++
++    params->result = STATUS_UNSUCCESSFUL;
++    if (pjack_get_sample_rate(client->jack) == params->rate && (!client->rate || client->rate == params->rate))
++        params->result = STATUS_SUCCESS;
++    else if (!client->active && reconnect(client, params->rate))
++    {
++        if (!pjack_activate(client->jack))
++        {
++            for (waited = 0; waited < 1500 && pjack_get_sample_rate(client->jack) != params->rate; waited += 10)
++                usleep(10000);
++            ok = pjack_get_sample_rate(client->jack) == params->rate;
++            pjack_deactivate(client->jack);
++        }
++        if (ok) params->result = STATUS_SUCCESS;
++        else
++        {
++            WARN("the graph stays at %u Hz, not %u\n", pjack_get_sample_rate(client->jack), params->rate);
++            reconnect(client, old);
++        }
++    }
++    params->sample_rate = pjack_get_sample_rate(client->jack);
++    return STATUS_SUCCESS;
++}
++
+ static void stop_following(struct asio_client *client)
+ {
+     if (!client->follow_started) return;
+@@ -735,6 +818,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     asio_run,
+     asio_realtime,
+     asio_cycle,
++    asio_set_rate,
+ };
+ 
+ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_asio_funcs_count);
+@@ -752,6 +836,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     asio_run,
+     asio_realtime,
+     asio_cycle,
++    asio_set_rate,
+ };
+ 
+ C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_asio_funcs_count);
+diff --git a/dlls/rayeasio/unixlib.h b/dlls/rayeasio/unixlib.h
+index 1a8f2cf..136e8bd 100644
+--- a/dlls/rayeasio/unixlib.h
++++ b/dlls/rayeasio/unixlib.h
+@@ -88,6 +88,14 @@ struct asio_cycle_params
+     UINT32 xruns;           /* out: cycles missed since start */
+ };
+ 
++struct asio_rate_params
++{
++    UINT64 handle;
++    UINT32 rate;
++    UINT32 sample_rate;     /* out: what the graph runs at now */
++    NTSTATUS result;        /* out */
++};
++
+ enum asio_funcs
+ {
+     unix_asio_open,
+@@ -98,5 +106,6 @@ enum asio_funcs
+     unix_asio_run,
+     unix_asio_realtime,
+     unix_asio_cycle,
++    unix_asio_set_rate,
+     unix_asio_funcs_count,
+ };

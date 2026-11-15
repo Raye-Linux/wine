@@ -1,0 +1,108 @@
+Subject: winmm, codecs, internet settings: device names programs list
+
+Names programs show in their device and codec lists: Sound Mapper,
+Game controller, the AVI handler and the two video codecs, plus the
+internet settings and certificate import texts.
+---
+diff --git a/dlls/avifil32/avifil32.rc b/dlls/avifil32/avifil32.rc
+index dd18450..31a25c9 100644
+--- a/dlls/avifil32/avifil32.rc
++++ b/dlls/avifil32/avifil32.rc
+@@ -32,7 +32,7 @@ STRINGTABLE
+   IDS_ALLFILES		"All files (*.*)"
+   IDS_VIDEO		"video"
+   IDS_AUDIO		"audio"
+-  IDS_AVIFILETYPE	"Wine AVI-default-filehandler"
++  IDS_AVIFILETYPE	"AVI default file handler"
+   IDS_UNCOMPRESSED      "uncompressed"
+ }
+ 
+diff --git a/dlls/cryptui/cryptui.rc b/dlls/cryptui/cryptui.rc
+index a7a310c..645aed5 100644
+--- a/dlls/cryptui/cryptui.rc
++++ b/dlls/cryptui/cryptui.rc
+@@ -312,7 +312,7 @@ IDD_IMPORT_STORE DIALOG 0,0,317,143
+ CAPTION "Certificate Import Wizard"
+ FONT 8, "MS Shell Dlg"
+ BEGIN
+-  LTEXT "Wine can automatically select the certificate store, or you can specify a location for the certificates.",
++  LTEXT "Raye can automatically select the certificate store, or you can specify a location for the certificates.",
+     -1, 21,1,220,25
+   AUTORADIOBUTTON "&Automatically select certificate store",
+     IDC_IMPORT_AUTO_STORE, 31,28,220,12, BS_AUTORADIOBUTTON|WS_TABSTOP
+diff --git a/dlls/inetcpl.cpl/inetcpl.rc b/dlls/inetcpl.cpl/inetcpl.rc
+index 3c4fe8b..ea21c0d 100644
+--- a/dlls/inetcpl.cpl/inetcpl.rc
++++ b/dlls/inetcpl.cpl/inetcpl.rc
+@@ -28,7 +28,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+ STRINGTABLE
+ BEGIN
+     IDS_CPL_NAME        "Internet Settings"
+-    IDS_CPL_INFO        "Configure Wine Internet Browser and related settings"
++    IDS_CPL_INFO        "Configure the Internet browser and related settings"
+     IDS_SEC_SETTINGS    "Security settings for zone: "
+     IDS_SEC_LEVEL0      "Custom"
+     IDS_SEC_LEVEL1      "Very Low"
+diff --git a/dlls/msrle32/msrle32.rc b/dlls/msrle32/msrle32.rc
+index bc38aae..eda687e 100644
+--- a/dlls/msrle32/msrle32.rc
++++ b/dlls/msrle32/msrle32.rc
+@@ -27,6 +27,6 @@ LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+ STRINGTABLE
+ {
+ 	IDS_NAME	"#msgctxt#do not translate#WINE-MS-RLE"
+-	IDS_DESCRIPTION	"Wine MS-RLE video codec"
+-	IDS_ABOUT       "Wine MS-RLE video codec\nCopyright 2002 by Michael Guennewig"
++	IDS_DESCRIPTION	"MS-RLE video codec"
++	IDS_ABOUT       "MS-RLE video codec\nCopyright 2002 by Michael Guennewig"
+ }
+diff --git a/dlls/msvidc32/msvidc32.rc b/dlls/msvidc32/msvidc32.rc
+index d8e8cca..9c03d4f 100644
+--- a/dlls/msvidc32/msvidc32.rc
++++ b/dlls/msvidc32/msvidc32.rc
+@@ -25,5 +25,5 @@ LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+ STRINGTABLE
+ {
+     IDS_NAME "#msgctxt#do not translate#MS-CRAM"
+-    IDS_DESCRIPTION "Wine Video 1 video codec"
++    IDS_DESCRIPTION "Video 1 video codec"
+ }
+diff --git a/dlls/shdoclc/shdoclc.rc b/dlls/shdoclc/shdoclc.rc
+index a350438..8438c17 100644
+--- a/dlls/shdoclc/shdoclc.rc
++++ b/dlls/shdoclc/shdoclc.rc
+@@ -24,7 +24,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+ 
+ STRINGTABLE
+ {
+-    IDS_MESSAGE_BOX_TITLE, "Wine Internet Explorer"
++    IDS_MESSAGE_BOX_TITLE, "Internet Explorer"
+ }
+ 
+ STRINGTABLE
+diff --git a/dlls/winmm/joystick.c b/dlls/winmm/joystick.c
+index ed839dc..d2b9f2f 100644
+--- a/dlls/winmm/joystick.c
++++ b/dlls/winmm/joystick.c
+@@ -469,7 +469,7 @@ MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsW( UINT_PTR id, JOYCAPSW *caps, U
+             caps->wPid = HIWORD(diprop.dwData);
+         }
+ 
+-        wcscpy( caps->szPname, L"Wine joystick driver" );
++        wcscpy( caps->szPname, L"Game controller" );
+         caps->wXmin = 0;
+         caps->wXmax = 0xffff;
+         caps->wYmin = 0;
+diff --git a/dlls/winmm/winmm.rc b/dlls/winmm/winmm.rc
+index 2d23fdf..7d50b60 100644
+--- a/dlls/winmm/winmm.rc
++++ b/dlls/winmm/winmm.rc
+@@ -132,7 +132,7 @@ MCIERR_SEQ_PORTUNSPECIFIED, 	"The system doesn't have a current MIDI port specif
+ MCIERR_SEQ_TIMER, 		"All multimedia timers are being used by other applications. Quit one of these applications, and then try again."
+ 
+ /* mixer UI */
+-IDS_MAPPER_NAME,		"Wine Sound Mapper"
++IDS_MAPPER_NAME,		"Sound Mapper"
+ IDS_VOLUME,			"Volume"
+ IDS_MASTER_VOLUME,		"Master Volume"
+ IDS_MUTE,			"Mute"

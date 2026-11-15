@@ -1,0 +1,75 @@
+Subject: shell32, kernelbase, winecfg: three places that still showed the name
+
+The About box said "Running on wine-11.21": it now names the system
+underneath ("Running on Linux 7.0"). The crash debugger started with a
+console window titled with its own name and an "attached to pid" line
+above the crash dialog: it now starts without a console (the "Debug"
+button still opens one). The title of the settings About page did not
+fit on one line.
+---
+diff --git a/dlls/kernelbase/debug.c b/dlls/kernelbase/debug.c
+index 07f64bd..cec7f64 100644
+--- a/dlls/kernelbase/debug.c
++++ b/dlls/kernelbase/debug.c
+@@ -576,7 +576,9 @@ static BOOL start_debugger( EXCEPTION_POINTERS *epointers, HANDLE event )
+     startup.cb = sizeof(startup);
+     startup.dwFlags = STARTF_USESHOWWINDOW;
+     startup.wShowWindow = SW_SHOWNORMAL;
+-    ret = CreateProcessW( NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, env, NULL, &startup, &info );
++    /* no console window for the debugger: the crash dialog is all people see */
++    ret = CreateProcessW( NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
++                          env, NULL, &startup, &info );
+     FreeEnvironmentStringsW( env );
+ 
+     if (ret)
+diff --git a/dlls/shell32/shell32_main.c b/dlls/shell32/shell32_main.c
+index 3b34292..e11dc51 100644
+--- a/dlls/shell32/shell32_main.c
++++ b/dlls/shell32/shell32_main.c
+@@ -904,12 +904,12 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam,
+         {
+             ABOUT_INFO *info = (ABOUT_INFO *)lParam;
+             WCHAR template[512], buffer[512], version[64];
+-            const char *(CDECL *wine_get_build_id)(void);
++            void (CDECL *wine_get_host_version)(const char **, const char **);
+ 
+             if (info)
+             {
+-                wine_get_build_id = (void *)GetProcAddress( GetModuleHandleA("ntdll.dll"),
+-                                                            "wine_get_build_id");
++                wine_get_host_version = (void *)GetProcAddress( GetModuleHandleA("ntdll.dll"),
++                                                                "wine_get_host_version");
+                 SendDlgItemMessageW(hWnd, stc1, STM_SETICON,(WPARAM)info->hIcon, 0);
+                 GetWindowTextW( hWnd, template, ARRAY_SIZE(template) );
+                 swprintf( buffer, ARRAY_SIZE(buffer), template, info->szApp );
+@@ -918,9 +918,15 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam,
+                 SetWindowTextW( GetDlgItem(hWnd, IDC_ABOUT_STATIC_TEXT2), info->szOtherStuff );
+                 GetWindowTextW( GetDlgItem(hWnd, IDC_ABOUT_STATIC_TEXT3),
+                                 template, ARRAY_SIZE(template) );
+-                if (wine_get_build_id)
++                if (wine_get_host_version)
+                 {
+-                    MultiByteToWideChar( CP_UTF8, 0, wine_get_build_id(), -1, version, ARRAY_SIZE(version) );
++                    const char *sysname, *release;
++                    char host[64];
++
++                    /* the system underneath, not the layer's own version string */
++                    wine_get_host_version( &sysname, &release );
++                    snprintf( host, sizeof(host), "%s %s", sysname, release );
++                    MultiByteToWideChar( CP_UTF8, 0, host, -1, version, ARRAY_SIZE(version) );
+                     swprintf( buffer, ARRAY_SIZE(buffer), template, version );
+                     SetWindowTextW( GetDlgItem(hWnd, IDC_ABOUT_STATIC_TEXT3), buffer );
+                 }
+diff --git a/programs/winecfg/about.c b/programs/winecfg/about.c
+index 0d85d91..6aeeb79 100644
+--- a/programs/winecfg/about.c
++++ b/programs/winecfg/about.c
+@@ -106,7 +106,7 @@ AboutDlgProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+         }
+ 
+         /* prepare the title text */
+-        titleFont = CreateFontW( -MulDiv(24, GetDeviceCaps(hDC, LOGPIXELSY), 72),
++        titleFont = CreateFontW( -MulDiv(16, GetDeviceCaps(hDC, LOGPIXELSY), 72),
+                                  0, 0, 0, 0, FALSE, 0, 0, 0, 0, 0, 0, 0, L"Tahoma" );
+         SendDlgItemMessageW(hDlg, IDC_ABT_TITLE_TEXT, WM_SETFONT, (WPARAM)titleFont, TRUE);
+ 

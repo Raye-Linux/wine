@@ -1,0 +1,469 @@
+Subject: win32u: Read the screen from the desktop share
+
+BitBlt and StretchBlt from the screen (GetDC(NULL), the desktop window,
+a DISPLAY DC) only saw Wine's own windows: the X server under a Wayland
+session holds nothing else. The source is now a bitmap filled from the
+portal streams, once the user has shared the screens. Reads smaller than
+a quarter of a screen never open the picker, and neither does a read the
+user did not ask for: the picker comes after a click, a key or a
+hotkey of the program, or when it keeps reading like a recorder (libraye-capture's
+rcap_gdi_read_asks decides). RAYE_SCREEN_CAPTURE_GDI=0 turns it off.
+---
+diff --git a/dlls/win32u/Makefile.in b/dlls/win32u/Makefile.in
+index 454fb25..72c3265 100644
+--- a/dlls/win32u/Makefile.in
++++ b/dlls/win32u/Makefile.in
+@@ -4,7 +4,7 @@ UNIXLIB   = win32u.so
+ IMPORTLIB = win32u
+ IMPORTS   = ntdll
+ UNIX_CFLAGS  = $(FREETYPE_CFLAGS) $(FONTCONFIG_CFLAGS)
+-UNIX_LIBS    = $(CORETEXT_LIBS) $(APPKIT_LIBS) $(PTHREAD_LIBS) -lm
++UNIX_LIBS    = $(CORETEXT_LIBS) $(APPKIT_LIBS) $(PTHREAD_LIBS) $(DL_LIBS) -lm
+ 
+ EXTRADLLFLAGS = -nodefaultlibs
+ 
+@@ -47,6 +47,7 @@ SOURCES = \
+ 	printdrv.c \
+ 	rawinput.c \
+ 	region.c \
++	screencap.c \
+ 	scroll.c \
+ 	spy.c \
+ 	syscall.c \
+diff --git a/dlls/win32u/bitblt.c b/dlls/win32u/bitblt.c
+index c6021dd..c38f995 100644
+--- a/dlls/win32u/bitblt.c
++++ b/dlls/win32u/bitblt.c
+@@ -590,9 +590,18 @@ BOOL WINAPI NtGdiStretchBlt( HDC hdcDst, INT xDst, INT yDst, INT widthDst, INT h
+ {
+     BOOL ret = FALSE;
+     DC *dcDst, *dcSrc;
++    HDC screen;
+ 
+     if (!rop_uses_src( rop )) return NtGdiPatBlt( hdcDst, xDst, yDst, widthDst, heightDst, rop );
+ 
++    if ((screen = screencap_source( hdcSrc, &xSrc, &ySrc, widthSrc, heightSrc )))
++    {
++        ret = NtGdiStretchBlt( hdcDst, xDst, yDst, widthDst, heightDst,
++                               screen, xSrc, ySrc, widthSrc, heightSrc, rop, bk_color );
++        screencap_release( screen );
++        return ret;
++    }
++
+     if (!(dcDst = get_dc_ptr( hdcDst ))) return FALSE;
+ 
+     if ((dcSrc = get_dc_ptr( hdcSrc )))
+diff --git a/dlls/win32u/message.c b/dlls/win32u/message.c
+index de1a484..932b958 100644
+--- a/dlls/win32u/message.c
++++ b/dlls/win32u/message.c
+@@ -2914,6 +2914,7 @@ static BOOL process_hardware_message( MSG *msg, UINT hw_id, const struct hardwar
+         ERR( "unknown message type %x\n", msg->message );
+     set_thread_dpi_awareness_context( context );
+     if (!ret) thread_info->client_info->msg_source = prev_source;
++    else screencap_note_input( msg->message );
+     return ret;
+ }
+ 
+@@ -3238,6 +3239,7 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
+             {
+                 if (!(flags & PM_NOYIELD) && idle_event) NtSetEvent( idle_event, NULL );
+             }
++            if (info.msg.message == WM_HOTKEY && (flags & PM_REMOVE)) screencap_note_input( WM_HOTKEY );
+             *msg = info.msg;
+             msg->pt = point_phys_to_win_dpi( info.msg.hwnd, info.msg.pt );
+             thread_info->message_pos   = MAKELONG( msg->pt.x, msg->pt.y );
+diff --git a/dlls/win32u/ntgdi_private.h b/dlls/win32u/ntgdi_private.h
+index fcfbce5..b6fdc8f 100644
+--- a/dlls/win32u/ntgdi_private.h
++++ b/dlls/win32u/ntgdi_private.h
+@@ -392,6 +392,10 @@ extern void make_gdi_object_system( HGDIOBJ handle, BOOL set );
+ /* mapping.c */
+ extern BOOL dp_to_lp( DC *dc, POINT *points, INT count );
+ extern void lp_to_dp( DC *dc, POINT *points, INT count );
++
++/* screencap.c */
++extern HDC screencap_source( HDC hdc_src, INT *x_src, INT *y_src, INT width, INT height );
++extern void screencap_release( HDC memdc );
+ extern BOOL set_map_mode( DC *dc, int mode );
+ extern void combine_transform( XFORM *result, const XFORM *xform1,
+                                const XFORM *xform2 );
+diff --git a/dlls/win32u/screencap.c b/dlls/win32u/screencap.c
+new file mode 100644
+index 0000000..682731a
+--- /dev/null
++++ b/dlls/win32u/screencap.c
+@@ -0,0 +1,332 @@
++/*
++ * GDI reads of the screen (BitBlt from GetDC(0) and friends), answered with
++ * what the desktop really shows, through the system share picker.
++ *
++ * Copyright 2026 Raye Linux
++ *
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include <dlfcn.h>
++#include <pthread.h>
++#include <stdarg.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <time.h>
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "ntgdi_private.h"
++#include "ntuser_private.h"
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(bitblt);
++
++/* from raye-capture.h */
++struct rcap_rect { int x, y, width, height; };
++struct rcap_frame_info
++{
++    int width, height;
++    UINT64 seq;
++    INT64 pts_ns, arrival_ns;
++    int cursor_visible, cursor_x, cursor_y, cursor_hot_x, cursor_hot_y, cursor_width, cursor_height;
++    UINT64 cursor_seq;
++    INT64 cursor_ns;
++};
++enum { RCAP_KIND_SCREENS = 1 };
++enum { RCAP_STATE_PENDING, RCAP_STATE_RUNNING, RCAP_STATE_DENIED, RCAP_STATE_CLOSED };
++struct rcap_gdi_reads { INT64 first_ms, last_ms; int count; };
++enum { RCAP_ASK_NOT, RCAP_ASK_AND_WAIT, RCAP_ASK_IN_BACKGROUND };
++
++static int (*p_open)( int kind, const char *app_key, const char *app_name, void **session );
++static void (*p_unref)( void *session );
++static int (*p_state)( void *session );
++static int (*p_find_stream)( void *session, const struct rcap_rect *monitors, int count, int monitor );
++static int (*p_wait)( void *session, int index, UINT64 after_seq, INT64 after_cursor_ns, int timeout,
++                      struct rcap_frame_info *info );
++static int (*p_copy)( void *session, int index, const struct rcap_rect *src, void *dst, int stride,
++                      unsigned int flags, struct rcap_frame_info *info );
++static int (*p_asks)( struct rcap_gdi_reads *reads, INT64 now_ms, INT64 last_input_ms );
++
++static pthread_once_t init_once = PTHREAD_ONCE_INIT;
++static void *library;
++static BOOL asked;
++static pthread_mutex_t reads_lock = PTHREAD_MUTEX_INITIALIZER;
++static struct rcap_gdi_reads reads;
++static INT64 last_input_ms = -1;
++
++#define MAX_MONITORS 64
++#define PICKER_WAIT_MS 120000
++
++static void load_library(void)
++{
++    const char *env = getenv( "RAYE_SCREEN_CAPTURE_GDI" );
++
++    if (env && env[0] == '0') return;
++    if (!(library = dlopen( "libraye-capture.so.1", RTLD_NOW ))) return;
++    if (!(p_open = dlsym( library, "rcap_session_open" )) ||
++        !(p_unref = dlsym( library, "rcap_session_unref" )) ||
++        !(p_state = dlsym( library, "rcap_session_state" )) ||
++        !(p_find_stream = dlsym( library, "rcap_session_find_stream" )) ||
++        !(p_wait = dlsym( library, "rcap_wait_frame" )) ||
++        !(p_copy = dlsym( library, "rcap_copy_frame" )) ||
++        !(p_asks = dlsym( library, "rcap_gdi_read_asks" )))
++    {
++        dlclose( library );
++        library = NULL;
++    }
++}
++
++static INT64 now_ms(void)
++{
++    struct timespec ts;
++    clock_gettime( CLOCK_MONOTONIC, &ts );
++    return (INT64)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++/* a click or a key in one of the program's windows, or one of its hotkeys */
++void screencap_note_input( UINT message )
++{
++    switch (message)
++    {
++    case WM_KEYDOWN:
++    case WM_SYSKEYDOWN:
++    case WM_LBUTTONDOWN:
++    case WM_RBUTTONDOWN:
++    case WM_MBUTTONDOWN:
++    case WM_XBUTTONDOWN:
++    /* a menu held open fires its item on the release */
++    case WM_LBUTTONUP:
++    case WM_RBUTTONUP:
++    case WM_HOTKEY:
++        pthread_mutex_lock( &reads_lock );
++        last_input_ms = now_ms();
++        pthread_mutex_unlock( &reads_lock );
++        break;
++    }
++}
++
++static int read_asks(void)
++{
++    int ret;
++
++    pthread_mutex_lock( &reads_lock );
++    ret = p_asks( &reads, now_ms(), last_input_ms );
++    pthread_mutex_unlock( &reads_lock );
++    return ret;
++}
++
++/*
++ * Each read holds the session only while it copies: the library pauses the
++ * streams a few seconds after the last read.
++ */
++static void *open_session(void)
++{
++    const UNICODE_STRING *path = &NtCurrentTeb()->Peb->ProcessParameters->ImagePathName;
++    char key[MAX_PATH * 3], *name;
++    void *session;
++    int len;
++
++    len = ntdll_wcstoumbs( path->Buffer, path->Length / sizeof(WCHAR), key, sizeof(key) - 1, FALSE );
++    key[len > 0 ? len : 0] = 0;
++    name = strrchr( key, '\\' );
++    if (p_open( RCAP_KIND_SCREENS, key, name ? name + 1 : key, &session )) return NULL;
++    asked = TRUE;
++    return session;
++}
++
++static BOOL is_screen_dc( HDC hdc )
++{
++    HWND hwnd;
++
++    /* memory DCs, by far the most common source, stop here */
++    if (get_gdi_object_type( hdc ) != NTGDI_OBJ_DC) return FALSE;
++    if (!(hwnd = NtUserWindowFromDC( hdc ))) return TRUE;
++    return hwnd == get_desktop_window();
++}
++
++/*
++ * Reading the screen is how Windows programs take screenshots, but small
++ * reads are also used for menu shadows and the like: those must not bring
++ * up a share picker. Asking starts at a quarter of a screen.
++ */
++static BOOL worth_asking( const RECT *rect, const RECT *monitors, UINT count )
++{
++    UINT i;
++
++    for (i = 0; i < count; i++)
++    {
++        RECT inter;
++        LONG area = (monitors[i].right - monitors[i].left) * (monitors[i].bottom - monitors[i].top);
++        if (!intersect_rect( &inter, rect, &monitors[i] )) continue;
++        if ((LONGLONG)(inter.right - inter.left) * (inter.bottom - inter.top) * 4 >= area) return TRUE;
++    }
++    return FALSE;
++}
++
++static struct rcap_rect rcap_rect( const RECT *rect )
++{
++    struct rcap_rect ret = { rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top };
++    return ret;
++}
++
++/* copies the part of one screen that falls in the bitmap, scaling if the screen has another size */
++static void fill_from_monitor( void *s, int stream, const RECT *monitor, const RECT *area, BYTE *bits, int pitch )
++{
++    struct rcap_frame_info info = { 0 };
++    RECT inter;
++    int mw = monitor->right - monitor->left, mh = monitor->bottom - monitor->top;
++    BYTE *dst;
++
++    if (!intersect_rect( &inter, area, monitor )) return;
++    /* right after a pause the kept image is old: wait a little for a new one, else use it */
++    p_wait( s, stream, 0, -1, 100, &info );
++    if (!info.width) return;
++    dst = bits + (inter.top - area->top) * pitch + (inter.left - area->left) * 4;
++
++    if (info.width == mw && info.height == mh)
++    {
++        RECT src = inter;
++        struct rcap_rect r;
++        OffsetRect( &src, -monitor->left, -monitor->top );
++        r = rcap_rect( &src );
++        p_copy( s, stream, &r, dst, pitch, 0, NULL );
++    }
++    else
++    {
++        int w = inter.right - inter.left, h = inter.bottom - inter.top, x, y;
++        struct rcap_rect full = { 0, 0, info.width, info.height };
++        DWORD *frame = malloc( (size_t)info.width * info.height * 4 );
++
++        if (!frame) return;
++        if (!p_copy( s, stream, &full, frame, info.width * 4, 0, NULL ))
++        {
++            for (y = 0; y < h; y++)
++            {
++                const DWORD *row = frame + (size_t)((inter.top - monitor->top + y) * info.height / mh) * info.width;
++                DWORD *out = (DWORD *)(dst + y * pitch);
++                for (x = 0; x < w; x++) out[x] = row[(inter.left - monitor->left + x) * info.width / mw];
++            }
++        }
++        free( frame );
++    }
++}
++
++/*
++ * Called by NtGdiStretchBlt before the driver. Returns a memory DC holding
++ * the screen under the source rectangle, with the source origin moved to
++ * match, or 0 to let the driver read the screen as before.
++ */
++HDC screencap_source( HDC hdc_src, INT *x_src, INT *y_src, INT width, INT height )
++{
++    RECT monitors[MAX_MONITORS], area, req;
++    struct rcap_rect rects[MAX_MONITORS];
++    BITMAPINFO info = {{ sizeof(BITMAPINFOHEADER) }};
++    UINT count, i;
++    HBITMAP bitmap;
++    HDC memdc;
++    POINT pt[2];
++    DC *dc;
++    void *s, *bits;
++    int state, pitch, ask = RCAP_ASK_NOT;
++
++    if (!width || !height || !is_screen_dc( hdc_src )) return 0;
++    pthread_once( &init_once, load_library );
++    if (!library) return 0;
++
++    if (!(dc = get_dc_ptr( hdc_src ))) return 0;
++    if (!dc->is_display || dc->attr->map_mode != MM_TEXT || dc->attr->graphics_mode != GM_COMPATIBLE)
++    {
++        release_dc_ptr( dc );
++        return 0;
++    }
++    pt[0].x = *x_src;
++    pt[0].y = *y_src;
++    pt[1].x = *x_src + width;
++    pt[1].y = *y_src + height;
++    lp_to_dp( dc, pt, 2 );
++    SetRect( &area, min( pt[0].x, pt[1].x ), min( pt[0].y, pt[1].y ), max( pt[0].x, pt[1].x ), max( pt[0].y, pt[1].y ) );
++    OffsetRect( &area, dc->attr->vis_rect.left, dc->attr->vis_rect.top );
++    release_dc_ptr( dc );
++
++    count = get_monitor_rects_raw( monitors, MAX_MONITORS );
++    {
++        RECT screens = { 0 };
++        for (i = 0; i < count; i++) union_rect( &screens, &screens, &monitors[i] );
++        /* nothing outside the screens to read, and no huge bitmap for a huge rectangle */
++        req = area;
++        if (!intersect_rect( &area, &area, &screens )) return 0;
++    }
++    /* small reads (menu shadows and the like) never ask */
++    if (worth_asking( &area, monitors, count )) ask = read_asks();
++    if (!asked && ask == RCAP_ASK_NOT) return 0;
++    if (!(s = open_session())) return 0;
++
++    if ((state = p_state( s )) == RCAP_STATE_PENDING && ask == RCAP_ASK_AND_WAIT)
++    {
++        /* the user just asked for a screenshot: wait for the picker, or the tool gets an empty one */
++        p_wait( s, -1, 0, -1, PICKER_WAIT_MS, NULL );
++        state = p_state( s );
++    }
++    if (state != RCAP_STATE_RUNNING)
++    {
++        p_unref( s );
++        return 0;
++    }
++
++    info.bmiHeader.biWidth = area.right - area.left;
++    info.bmiHeader.biHeight = -(area.bottom - area.top);
++    info.bmiHeader.biPlanes = 1;
++    info.bmiHeader.biBitCount = 32;
++    info.bmiHeader.biCompression = BI_RGB;
++    if (!(memdc = NtGdiCreateCompatibleDC( 0 )))
++    {
++        p_unref( s );
++        return 0;
++    }
++    if (!(bitmap = NtGdiCreateDIBSection( memdc, 0, 0, &info, DIB_RGB_COLORS, 0, 0, 0, &bits )))
++    {
++        NtGdiDeleteObjectApp( memdc );
++        p_unref( s );
++        return 0;
++    }
++    NtGdiSelectBitmap( memdc, bitmap );
++    pitch = info.bmiHeader.biWidth * 4;
++
++    for (i = 0; i < count; i++) rects[i] = rcap_rect( &monitors[i] );
++    for (i = 0; i < count; i++)
++    {
++        int stream = p_find_stream( s, rects, count, i );
++        if (stream >= 0) fill_from_monitor( s, stream, &monitors[i], &area, bits, pitch );
++    }
++    p_unref( s );
++
++    *x_src = (width < 0 ? req.right : req.left) - area.left;
++    *y_src = (height < 0 ? req.bottom : req.top) - area.top;
++    TRACE( "%s from the share\n", wine_dbgstr_rect( &area ) );
++    return memdc;
++}
++
++void screencap_release( HDC memdc )
++{
++    HBITMAP bitmap = NtGdiGetDCObject( memdc, NTGDI_OBJ_SURF );
++    NtGdiDeleteObjectApp( memdc );
++    NtGdiDeleteObjectApp( bitmap );
++}
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index c57add4..c4e6d0a 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -3146,6 +3146,23 @@ static RECT monitors_get_union_rect( struct ratio dpi, MONITOR_DPI_TYPE type )
+     return rect;
+ }
+ 
++/* the screens as the display driver sees them, in pixels */
++UINT get_monitor_rects_raw( RECT *rects, UINT max )
++{
++    struct monitor *monitor;
++    UINT count = 0;
++
++    if (!lock_display_devices( FALSE )) return 0;
++    LIST_FOR_EACH_ENTRY( monitor, &monitors, struct monitor, entry )
++    {
++        if (count == max) break;
++        if (!is_monitor_active( monitor ) || monitor->is_clone) continue;
++        rects[count++] = monitor_get_rect( monitor, no_dpi, MDT_RAW_DPI );
++    }
++    unlock_display_devices();
++    return count;
++}
++
+ /* map a monitor rect from MDT_RAW_DPI to MDT_DEFAULT coordinates */
+ RECT map_rect_raw_to_virt( RECT rect, struct ratio dpi_to )
+ {
+diff --git a/dlls/win32u/win32u_private.h b/dlls/win32u/win32u_private.h
+index 16493b6..fd1aa66 100644
+--- a/dlls/win32u/win32u_private.h
++++ b/dlls/win32u/win32u_private.h
+@@ -181,6 +181,8 @@ extern struct ratio get_thread_dpi(void);
+ extern UINT set_thread_dpi_awareness_context( UINT context );
+ extern UINT get_thread_dpi_awareness_context(void);
+ extern RECT get_virtual_screen_rect( struct ratio dpi, MONITOR_DPI_TYPE type );
++extern UINT get_monitor_rects_raw( RECT *rects, UINT max );
++extern void screencap_note_input( UINT message );
+ extern const char *gpu_device_name( UINT16 vendor, UINT16 device, const char *name );
+ extern BOOL is_exiting_thread( DWORD tid );
+ extern UINT map_user_dpi( UINT value, struct ratio dpi_from );

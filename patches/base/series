@@ -1,0 +1,18 @@
+# Applied in this order by build.sh, one file name per line.
+0001-graphics-in-every-prefix.patch
+0002-setup-and-addon-prompts.patch
+0003-crash-dialog.patch
+0004-settings.patch
+0005-shell-and-about.patch
+0006-programs.patch
+0007-devices-and-codecs.patch
+0008-desktop-entries.patch
+0009-french-names.patch
+0010-raye-icons.patch
+0011-last-name-leaks.patch
+0012-crypt32-sha256-thumbprint.patch
+0013-gdi32-process-scheduling-priority.patch
+0014-device-names.patch
+0015-codec-and-device-names.patch
+0016-keep-hidden-windows-hidden.patch
+0017-d2d1-custom-effects.patch

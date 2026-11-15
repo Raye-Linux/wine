@@ -1,0 +1,29 @@
+Subject: winealsa: a MIDI input that fails to connect is not left "in use"
+
+When snd_seq_connect_from() failed, midi_in_open() returned
+MMSYSERR_NOTENABLED but kept the device's descriptor and its reference on
+the sequencer, so the next open of the same input said MMSYSERR_ALLOCATED.
+FL Studio retries every input it lists: on a PipeWire system its MIDI
+settings showed "PipeWire-System - input" as FAIL, then a stream of "The
+MIDI input device is already allocated. It may be in use by another
+application." boxes for a device nothing else had open. Undo the open
+before returning.
+---
+diff --git a/dlls/winealsa.drv/alsamidi.c b/dlls/winealsa.drv/alsamidi.c
+--- a/dlls/winealsa.drv/alsamidi.c
++++ b/dlls/winealsa.drv/alsamidi.c
+@@ -1180,7 +1180,14 @@
+     ret = snd_seq_connect_from(midi_seq, port_in, src->addr.client, src->addr.port);
+     seq_unlock();
+     if (ret < 0)
++    {
++        /* give the device back: it was never opened, and the next try
++         * must not be told it is in use by another application */
++        memset(&src->midiDesc, 0, sizeof(src->midiDesc));
++        src->seq = NULL;
++        seq_close();
+         return MMSYSERR_NOTENABLED;
++    }
+ 
+     TRACE("Input port :%d connected %d:%d\n", port_in, src->addr.client, src->addr.port);
+ 

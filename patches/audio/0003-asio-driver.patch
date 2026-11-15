@@ -1,0 +1,1994 @@
+Subject: rayeasio: an ASIO driver on PipeWire, registered in every prefix
+
+Music programs (FL Studio, Ableton Live, Reaper) want ASIO for small
+buffers. Add "Raye ASIO": a PE driver with a unix side that is a client
+of PipeWire's JACK library, loaded by path so a JACK library that needs
+its own server is never picked up first.
+
+- The whole duplex cycle runs in one JACK callback; the host's buffer
+  switch runs on its own thread, handed each cycle through futexes, with
+  realtime priority from RLIMIT_RTPRIO or RealtimeKit. A late host costs
+  one cycle of silence and an overload message, never a stuck graph.
+- The buffer size the host picks (32 to 2048, 256 by default) is forced
+  on the graph while the driver runs (node.force-quantum); other programs
+  keep playing at that size, as with ASIO on Windows.
+- Channels follow the default output and input, linked through PipeWire's
+  "system:" names and moved within a second when the default changes.
+  Links the user makes by hand are left alone.
+- Built for 64-bit and 32-bit programs; the unix call structures have the
+  same layout on both, so WoW64 needs no thunks.
+- The control panel (EN/FR) picks the buffer size and asks the host to
+  restart its audio.
+
+wine.inf registers it in every new or updated prefix, under
+HKLM\Software\ASIO\Raye ASIO. The configure hunk is the one autoconf
+writes for a new dll, so the build does not need autoreconf.
+
+The ASIO plumbing (thiscall layout, selectors, buffer switch with time
+info) follows WineASIO (LGPL 2.1 or later); the transport, threading,
+registration and panel are new.
+---
+diff --git a/configure b/configure
+index 20985fb..2c2d59f 100755
+--- a/configure
++++ b/configure
+@@ -1446,6 +1446,7 @@ enable_qwave
+ enable_rasapi16
+ enable_rasapi32
+ enable_rasdlg
++enable_rayeasio
+ enable_regapi
+ enable_resampledmo
+ enable_resutils
+@@ -22574,6 +22575,7 @@ wine_fn_config_makefile dlls/rasapi16.dll16 enable_rasapi16
+ wine_fn_config_makefile dlls/rasapi32 enable_rasapi32
+ wine_fn_config_makefile dlls/rasapi32/tests enable_tests
+ wine_fn_config_makefile dlls/rasdlg enable_rasdlg
++wine_fn_config_makefile dlls/rayeasio enable_rayeasio
+ wine_fn_config_makefile dlls/regapi enable_regapi
+ wine_fn_config_makefile dlls/resampledmo enable_resampledmo
+ wine_fn_config_makefile dlls/resutils enable_resutils
+diff --git a/configure.ac b/configure.ac
+index 91225fd..2f8f8e8 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -3072,6 +3072,7 @@ WINE_CONFIG_MAKEFILE(dlls/rasapi16.dll16)
+ WINE_CONFIG_MAKEFILE(dlls/rasapi32)
+ WINE_CONFIG_MAKEFILE(dlls/rasapi32/tests)
+ WINE_CONFIG_MAKEFILE(dlls/rasdlg)
++WINE_CONFIG_MAKEFILE(dlls/rayeasio)
+ WINE_CONFIG_MAKEFILE(dlls/regapi)
+ WINE_CONFIG_MAKEFILE(dlls/resampledmo)
+ WINE_CONFIG_MAKEFILE(dlls/resutils)
+diff --git a/dlls/rayeasio/Makefile.in b/dlls/rayeasio/Makefile.in
+new file mode 100644
+index 0000000..caf1e72
+--- /dev/null
++++ b/dlls/rayeasio/Makefile.in
+@@ -0,0 +1,9 @@
++MODULE    = rayeasio.dll
++UNIXLIB   = rayeasio.so
++IMPORTS   = uuid advapi32 user32 winmm
++UNIX_LIBS = $(PTHREAD_LIBS)
++
++SOURCES = \
++	asio.c \
++	jack.c \
++	rayeasio.rc
+diff --git a/dlls/rayeasio/asio.c b/dlls/rayeasio/asio.c
+new file mode 100644
+index 0000000..17b9d58
+--- /dev/null
++++ b/dlls/rayeasio/asio.c
+@@ -0,0 +1,898 @@
++/*
++ * Raye ASIO driver
++ *
++ * Copyright 2006 Robert Reif
++ * Portions copyright 2007 Ralf Beck
++ * Portions copyright 2007 Johnny Petrantoni
++ * Portions copyright 2007 Stephane Letz
++ * Portions copyright 2008 William Steidtmann
++ * Portions copyright 2010 Peter L Jones
++ * Portions copyright 2010 Torben Hohn
++ * Portions copyright 2010 Nedko Arnaudov
++ * Portions copyright 2013 Joakim Hernberg
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#define COBJMACROS
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winbase.h"
++#include "winternl.h"
++#include "winuser.h"
++#include "winreg.h"
++#include "mmsystem.h"
++#include "objbase.h"
++#include "olectl.h"
++#include "wine/asm.h"
++#include "wine/debug.h"
++
++#include "unixlib.h"
++#include "resource.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(asio);
++
++#define UNIX_CALL(func, params) WINE_UNIX_CALL(unix_ ## func, params)
++
++static const CLSID CLSID_RayeASIO = {0xe4491bcf, 0x5a31, 0x4977, {0x92, 0xba, 0xeb, 0x3c, 0xad, 0x66, 0xe8, 0x3d}};
++static const WCHAR clsid_string[] = L"{E4491BCF-5A31-4977-92BA-EB3CAD66E83D}";
++static const WCHAR driver_name[] = L"Raye ASIO";
++static const WCHAR settings_key[] = L"Software\\Raye\\ASIO";
++
++#define MIN_BUFFER_SIZE       32
++#define MAX_BUFFER_SIZE       2048
++#define DEFAULT_BUFFER_SIZE   256
++
++/* ASIO's own types and constants, from its public interface. */
++#define ASE_OK                0
++#define ASE_SUCCESS           0x3f4847a0
++#define ASE_NotPresent        (-1000)
++#define ASE_HWMalfunction     (-999)
++#define ASE_InvalidParameter  (-998)
++#define ASE_InvalidMode       (-997)
++#define ASE_NoClock           (-995)
++#define ASE_NoMemory          (-994)
++
++#define ASIOSTFloat32LSB      19
++
++enum
++{
++    kAsioSelectorSupported = 1,
++    kAsioEngineVersion,
++    kAsioResetRequest,
++    kAsioBufferSizeChange,
++    kAsioResyncRequest,
++    kAsioLatenciesChanged,
++    kAsioSupportsTimeInfo,
++    kAsioSupportsTimeCode,
++    kAsioMMCCommand,
++    kAsioSupportsInputMonitor,
++    kAsioSupportsInputGain,
++    kAsioSupportsInputMeter,
++    kAsioSupportsOutputGain,
++    kAsioSupportsOutputMeter,
++    kAsioOverload,
++};
++
++enum
++{
++    kAsioEnableTimeCodeRead = 1,
++    kAsioDisableTimeCodeRead,
++    kAsioSetInputMonitor,
++    kAsioTransport,
++    kAsioSetInputGain,
++    kAsioGetInputMeter,
++    kAsioSetOutputGain,
++    kAsioGetOutputMeter,
++    kAsioCanInputMonitor,
++    kAsioCanTimeInfo,
++    kAsioCanTimeCode,
++};
++#define kAsioCanReportOverload 0x24042012
++
++struct asio_samples { ULONG hi, lo; };
++
++struct asio_time
++{
++    LONG reserved[4];
++    struct
++    {
++        double speed;
++        struct asio_samples system_time;
++        struct asio_samples sample_position;
++        double sample_rate;
++        ULONG flags;
++        char reserved[12];
++    } time_info;
++    struct
++    {
++        double speed;
++        struct asio_samples time_code_samples;
++        ULONG flags;
++        char future[64];
++    } time_code;
++};
++
++#define kSystemTimeValid      0x1
++#define kSamplePositionValid  0x2
++#define kSampleRateValid      0x4
++
++struct asio_callbacks
++{
++    void (CDECL *buffer_switch)(LONG index, LONG direct_process);
++    void (CDECL *sample_rate_changed)(double rate);
++    LONG (CDECL *message)(LONG selector, LONG value, void *message, double *opt);
++    struct asio_time *(CDECL *buffer_switch_time_info)(struct asio_time *params, LONG index, LONG direct_process);
++};
++
++struct asio_buffer_info
++{
++    LONG is_input;
++    LONG channel;
++    void *buffers[2];
++};
++
++struct asio_channel_info
++{
++    LONG channel;
++    LONG is_input;
++    LONG is_active;
++    LONG group;
++    LONG type;
++    char name[32];
++};
++
++struct asio_clock_source
++{
++    LONG index;
++    LONG channel;
++    LONG group;
++    LONG is_current;
++    char name[32];
++};
++
++enum driver_state { STATE_LOADED, STATE_INITIALIZED, STATE_PREPARED, STATE_RUNNING };
++
++struct asio_driver
++{
++    const void * const *vtbl;
++    LONG ref;
++
++    enum driver_state state;
++    UINT64 handle;
++    HWND window;
++    char error[128];
++
++    UINT32 sample_rate;
++    UINT32 inputs, outputs;
++    UINT32 frames;          /* size of the host's buffers */
++    UINT32 preferred;
++    UINT32 input_mask, output_mask;
++    float *buffers;
++    float *in_bufs[ASIO_MAX_CHANNELS], *out_bufs[ASIO_MAX_CHANNELS];
++
++    struct asio_callbacks *callbacks;
++    BOOL time_info;
++    BOOL report_overload;
++    struct asio_time time;
++    struct asio_samples position, stamp;
++
++    HANDLE thread, thread_ready, thread_go;
++    DWORD thread_id;
++};
++
++static HINSTANCE instance;
++
++static void to_asio_samples(UINT64 value, struct asio_samples *out)
++{
++    out->hi = value >> 32;
++    out->lo = (ULONG)value;
++}
++
++static DWORD read_setting(const WCHAR *name, DWORD def)
++{
++    DWORD value, size = sizeof(value);
++
++    if (RegGetValueW(HKEY_CURRENT_USER, settings_key, name, RRF_RT_REG_DWORD, NULL, &value, &size))
++        return def;
++    return value;
++}
++
++static BOOL valid_buffer_size(UINT32 frames)
++{
++    return frames >= MIN_BUFFER_SIZE && frames <= MAX_BUFFER_SIZE && !(frames & (frames - 1));
++}
++
++static void load_string(UINT id, WCHAR *buf, int len)
++{
++    if (!LoadStringW(instance, id, buf, len)) buf[0] = 0;
++}
++
++static LONG send_message(struct asio_driver *driver, LONG selector, LONG value)
++{
++    if (!driver->callbacks || !driver->callbacks->message) return 0;
++    return driver->callbacks->message(selector, value, NULL, NULL);
++}
++
++static HRESULT WINAPI driver_QueryInterface(struct asio_driver *driver, REFIID riid, void **obj)
++{
++    TRACE("%p, %s, %p\n", driver, debugstr_guid(riid), obj);
++
++    if (!obj) return E_POINTER;
++    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &CLSID_RayeASIO))
++    {
++        InterlockedIncrement(&driver->ref);
++        *obj = driver;
++        return S_OK;
++    }
++    *obj = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI driver_AddRef(struct asio_driver *driver)
++{
++    return InterlockedIncrement(&driver->ref);
++}
++
++static LONG __thiscall asio_dispose_buffers(struct asio_driver *driver);
++
++static ULONG WINAPI driver_Release(struct asio_driver *driver)
++{
++    ULONG ref = InterlockedDecrement(&driver->ref);
++    struct asio_handle_params params;
++
++    if (ref) return ref;
++
++    asio_dispose_buffers(driver);
++    if (driver->handle)
++    {
++        params.handle = driver->handle;
++        UNIX_CALL(asio_close, &params);
++    }
++    free(driver);
++    return 0;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_init, 8)
++static LONG __thiscall asio_init(struct asio_driver *driver, void *sys_ref)
++{
++    struct asio_open_params params = { 0 };
++    WCHAR path[MAX_PATH], *name, *dot;
++
++    TRACE("%p, %p\n", driver, sys_ref);
++
++    if (driver->state != STATE_LOADED) return 1;
++    driver->window = sys_ref;
++
++    GetModuleFileNameW(NULL, path, ARRAY_SIZE(path));
++    name = wcsrchr(path, '\\');
++    name = name ? name + 1 : path;
++    if ((dot = wcsrchr(name, '.'))) *dot = 0;
++    WideCharToMultiByte(CP_UTF8, 0, name, -1, params.client_name, sizeof(params.client_name), NULL, NULL);
++
++    driver->preferred = read_setting(L"Buffer size", DEFAULT_BUFFER_SIZE);
++    if (!valid_buffer_size(driver->preferred)) driver->preferred = DEFAULT_BUFFER_SIZE;
++    params.inputs = min(read_setting(L"Inputs", 0), ASIO_MAX_CHANNELS);
++    params.outputs = min(read_setting(L"Outputs", 0), ASIO_MAX_CHANNELS);
++
++    if (UNIX_CALL(asio_open, &params) || params.result)
++    {
++        WCHAR msg[128];
++
++        load_string(IDS_NO_SERVER, msg, ARRAY_SIZE(msg));
++        WideCharToMultiByte(CP_ACP, 0, msg, -1, driver->error, sizeof(driver->error), NULL, NULL);
++        return 0;
++    }
++
++    driver->handle = params.handle;
++    driver->sample_rate = params.sample_rate;
++    driver->inputs = params.inputs;
++    driver->outputs = params.outputs;
++    driver->state = STATE_INITIALIZED;
++    TRACE("%u inputs, %u outputs, %u Hz, graph at %u frames\n", driver->inputs, driver->outputs,
++          driver->sample_rate, params.current_size);
++    return 1;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_driver_name, 8)
++static void __thiscall asio_get_driver_name(struct asio_driver *driver, char *name)
++{
++    WideCharToMultiByte(CP_ACP, 0, driver_name, -1, name, 32, NULL, NULL);
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_driver_version, 4)
++static LONG __thiscall asio_get_driver_version(struct asio_driver *driver)
++{
++    return 1;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_error_message, 8)
++static void __thiscall asio_get_error_message(struct asio_driver *driver, char *string)
++{
++    /* the host's buffer is 124 bytes */
++    lstrcpynA(string, driver->error, 124);
++}
++
++static DWORD WINAPI callback_thread(void *arg)
++{
++    struct asio_driver *driver = arg;
++    struct asio_cycle_params params = { 0 };
++    UINT32 xruns = 0;
++    DWORD ms;
++
++    SetThreadDescription(GetCurrentThread(), L"asio_callback");
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
++    params.handle = driver->handle;
++    UNIX_CALL(asio_realtime, &params.handle);
++    SignalObjectAndWait(driver->thread_ready, driver->thread_go, INFINITE, FALSE);
++
++    for (;;)
++    {
++        UNIX_CALL(asio_cycle, &params);
++        params.done = 0;
++
++        if (params.flags & ASIO_CYCLE_STOP) break;
++        if (params.flags & ASIO_CYCLE_RESET)
++        {
++            TRACE("buffer size changed, asking the host to start over\n");
++            if (send_message(driver, kAsioSelectorSupported, kAsioResetRequest))
++                send_message(driver, kAsioResetRequest, 0);
++            continue;
++        }
++        if (params.flags & ASIO_CYCLE_LATENCY && send_message(driver, kAsioSelectorSupported, kAsioLatenciesChanged))
++            send_message(driver, kAsioLatenciesChanged, 0);
++        if (params.flags & ASIO_CYCLE_RATE && params.sample_rate != driver->sample_rate)
++        {
++            driver->sample_rate = params.sample_rate;
++            if (driver->callbacks->sample_rate_changed)
++                driver->callbacks->sample_rate_changed(driver->sample_rate);
++        }
++        if (params.xruns != xruns)
++        {
++            WARN("%u cycles late so far\n", params.xruns);
++            if (driver->report_overload) send_message(driver, kAsioOverload, 0);
++            xruns = params.xruns;
++        }
++        if (!(params.flags & ASIO_CYCLE_READY)) continue;
++
++        ms = timeGetTime();
++        to_asio_samples(params.position, &driver->position);
++        to_asio_samples((UINT64)ms * 1000000, &driver->stamp);
++
++        if (driver->time_info)
++        {
++            driver->time.time_info.speed = 1.0;
++            driver->time.time_info.system_time = driver->stamp;
++            driver->time.time_info.sample_position = driver->position;
++            driver->time.time_info.sample_rate = driver->sample_rate;
++            driver->time.time_info.flags = kSystemTimeValid | kSamplePositionValid | kSampleRateValid;
++            driver->callbacks->buffer_switch_time_info(&driver->time, params.index, TRUE);
++        }
++        else
++            driver->callbacks->buffer_switch(params.index, TRUE);
++        params.done = 1;
++    }
++    return 0;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_start, 4)
++static LONG __thiscall asio_start(struct asio_driver *driver)
++{
++    struct asio_run_params params = { driver->handle, 1 };
++
++    TRACE("%p\n", driver);
++
++    if (driver->state != STATE_PREPARED) return ASE_NotPresent;
++
++    memset(driver->buffers, 0, (driver->inputs + driver->outputs) * 2 * driver->frames * sizeof(float));
++    driver->position.hi = driver->position.lo = 0;
++    /* The thread gets its priority before the first cycle waits for it. */
++    driver->thread_ready = CreateEventW(NULL, FALSE, FALSE, NULL);
++    driver->thread_go = CreateEventW(NULL, FALSE, FALSE, NULL);
++    if (!(driver->thread = CreateThread(NULL, 0, callback_thread, driver, 0, &driver->thread_id)))
++    {
++        CloseHandle(driver->thread_ready);
++        CloseHandle(driver->thread_go);
++        return ASE_HWMalfunction;
++    }
++    WaitForSingleObject(driver->thread_ready, INFINITE);
++    UNIX_CALL(asio_run, &params);
++    SetEvent(driver->thread_go);
++    CloseHandle(driver->thread_ready);
++    driver->state = STATE_RUNNING;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_stop, 4)
++static LONG __thiscall asio_stop(struct asio_driver *driver)
++{
++    struct asio_run_params params = { driver->handle, 0 };
++
++    TRACE("%p\n", driver);
++
++    if (driver->state != STATE_RUNNING) return ASE_NotPresent;
++
++    UNIX_CALL(asio_run, &params);
++    /* A host may stop from inside its buffer switch. */
++    if (GetCurrentThreadId() != driver->thread_id)
++        WaitForSingleObject(driver->thread, INFINITE);
++    CloseHandle(driver->thread);
++    CloseHandle(driver->thread_go);
++    driver->thread = NULL;
++    driver->thread_id = 0;
++    driver->state = STATE_PREPARED;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_channels, 12)
++static LONG __thiscall asio_get_channels(struct asio_driver *driver, LONG *inputs, LONG *outputs)
++{
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    if (!inputs || !outputs) return ASE_InvalidParameter;
++    *inputs = driver->inputs;
++    *outputs = driver->outputs;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_latencies, 12)
++static LONG __thiscall asio_get_latencies(struct asio_driver *driver, LONG *input, LONG *output)
++{
++    struct asio_info_params params = { driver->handle };
++    UINT32 frames;
++
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    if (!input || !output) return ASE_InvalidParameter;
++
++    UNIX_CALL(asio_get_info, &params);
++    frames = driver->frames ? driver->frames : driver->preferred;
++    *input = frames + params.input_latency;
++    *output = frames + params.output_latency;
++    TRACE("input %d, output %d\n", (int)*input, (int)*output);
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_buffer_size, 20)
++static LONG __thiscall asio_get_buffer_size(struct asio_driver *driver, LONG *min_size, LONG *max_size,
++                                        LONG *preferred, LONG *granularity)
++{
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    if (!min_size || !max_size || !preferred || !granularity) return ASE_InvalidParameter;
++
++    *min_size = MIN_BUFFER_SIZE;
++    *max_size = MAX_BUFFER_SIZE;
++    *preferred = driver->preferred;
++    *granularity = -1;  /* powers of two */
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_can_sample_rate, 12)
++static LONG __thiscall asio_can_sample_rate(struct asio_driver *driver, double rate)
++{
++    TRACE("%f, running at %u\n", rate, driver->sample_rate);
++
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    return rate == driver->sample_rate ? ASE_OK : ASE_NoClock;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_sample_rate, 8)
++static LONG __thiscall asio_get_sample_rate(struct asio_driver *driver, double *rate)
++{
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    if (!rate) return ASE_InvalidParameter;
++    *rate = driver->sample_rate;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_set_sample_rate, 12)
++static LONG __thiscall asio_set_sample_rate(struct asio_driver *driver, double rate)
++{
++    TRACE("%f, running at %u\n", rate, driver->sample_rate);
++
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    /* 0 asks for an external clock, which is the graph's anyway */
++    return rate == 0.0 || rate == driver->sample_rate ? ASE_OK : ASE_NoClock;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_clock_sources, 12)
++static LONG __thiscall asio_get_clock_sources(struct asio_driver *driver, struct asio_clock_source *clocks, LONG *count)
++{
++    WCHAR name[32];
++
++    if (!clocks || !count) return ASE_InvalidParameter;
++
++    load_string(IDS_INTERNAL, name, ARRAY_SIZE(name));
++    clocks->index = 0;
++    clocks->channel = -1;
++    clocks->group = -1;
++    clocks->is_current = 1;
++    WideCharToMultiByte(CP_ACP, 0, name, -1, clocks->name, sizeof(clocks->name), NULL, NULL);
++    *count = 1;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_set_clock_source, 8)
++static LONG __thiscall asio_set_clock_source(struct asio_driver *driver, LONG index)
++{
++    return index ? ASE_InvalidParameter : ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_sample_position, 12)
++static LONG __thiscall asio_get_sample_position(struct asio_driver *driver, struct asio_samples *position,
++                                            struct asio_samples *stamp)
++{
++    if (driver->state < STATE_PREPARED) return ASE_NotPresent;
++    if (!position || !stamp) return ASE_InvalidParameter;
++    *position = driver->position;
++    *stamp = driver->stamp;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_get_channel_info, 8)
++static LONG __thiscall asio_get_channel_info(struct asio_driver *driver, struct asio_channel_info *info)
++{
++    WCHAR format[32], name[32];
++
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    if (!info || info->channel < 0 || info->channel >= (info->is_input ? driver->inputs : driver->outputs))
++        return ASE_InvalidParameter;
++
++    info->is_active = !!((info->is_input ? driver->input_mask : driver->output_mask) & (1u << info->channel));
++    info->group = 0;
++    info->type = ASIOSTFloat32LSB;
++    load_string(info->is_input ? IDS_INPUT : IDS_OUTPUT, format, ARRAY_SIZE(format));
++    swprintf(name, ARRAY_SIZE(name), format, info->channel + 1);
++    WideCharToMultiByte(CP_ACP, 0, name, -1, info->name, sizeof(info->name), NULL, NULL);
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_create_buffers, 20)
++static LONG __thiscall asio_create_buffers(struct asio_driver *driver, struct asio_buffer_info *info,
++                                       LONG count, LONG frames, struct asio_callbacks *callbacks)
++{
++    struct asio_prepare_params params = { driver->handle };
++    UINT32 in_mask = 0, out_mask = 0;
++    unsigned int i;
++    float *buf;
++
++    TRACE("%p, %p, %d, %d, %p\n", driver, info, (int)count, (int)frames, callbacks);
++
++    if (driver->state != STATE_INITIALIZED) return ASE_InvalidMode;
++    if (!info || !callbacks || count <= 0) return ASE_InvalidParameter;
++    if (!valid_buffer_size(frames))
++    {
++        WARN("buffer size %d refused\n", (int)frames);
++        return ASE_InvalidMode;
++    }
++
++    for (i = 0; i < count; i++)
++    {
++        UINT32 *mask = info[i].is_input ? &in_mask : &out_mask;
++
++        if (info[i].channel < 0 || info[i].channel >= (info[i].is_input ? driver->inputs : driver->outputs) ||
++            *mask & (1u << info[i].channel))
++            return ASE_InvalidParameter;
++        *mask |= 1u << info[i].channel;
++    }
++
++    /* Each channel gets both halves in one run, inputs first. */
++    if (!(driver->buffers = VirtualAlloc(NULL, (driver->inputs + driver->outputs) * 2 * frames * sizeof(float),
++                                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)))
++        return ASE_NoMemory;
++    buf = driver->buffers;
++    for (i = 0; i < driver->inputs; i++, buf += 2 * frames) driver->in_bufs[i] = buf;
++    for (i = 0; i < driver->outputs; i++, buf += 2 * frames) driver->out_bufs[i] = buf;
++
++    for (i = 0; i < count; i++)
++    {
++        float *start = info[i].is_input ? driver->in_bufs[info[i].channel] : driver->out_bufs[info[i].channel];
++
++        info[i].buffers[0] = start;
++        info[i].buffers[1] = start + frames;
++        if (info[i].is_input)
++        {
++            params.inputs[info[i].channel][0] = (ULONG_PTR)start;
++            params.inputs[info[i].channel][1] = (ULONG_PTR)(start + frames);
++        }
++        else
++        {
++            params.outputs[info[i].channel][0] = (ULONG_PTR)start;
++            params.outputs[info[i].channel][1] = (ULONG_PTR)(start + frames);
++        }
++    }
++
++    driver->callbacks = callbacks;
++    driver->frames = frames;
++    driver->input_mask = in_mask;
++    driver->output_mask = out_mask;
++    driver->time_info = callbacks->buffer_switch_time_info && send_message(driver, kAsioSupportsTimeInfo, 0);
++    driver->report_overload = send_message(driver, kAsioSelectorSupported, kAsioOverload);
++    memset(&driver->time, 0, sizeof(driver->time));
++
++    params.frames = frames;
++    params.input_mask = in_mask;
++    params.output_mask = out_mask;
++    if (UNIX_CALL(asio_prepare, &params) || params.result)
++    {
++        VirtualFree(driver->buffers, 0, MEM_RELEASE);
++        driver->buffers = NULL;
++        driver->callbacks = NULL;
++        driver->frames = 0;
++        driver->input_mask = driver->output_mask = 0;
++        return ASE_HWMalfunction;
++    }
++
++    driver->state = STATE_PREPARED;
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_dispose_buffers, 4)
++static LONG __thiscall asio_dispose_buffers(struct asio_driver *driver)
++{
++    struct asio_handle_params params = { driver->handle };
++
++    TRACE("%p\n", driver);
++
++    if (driver->state == STATE_RUNNING) asio_stop(driver);
++    if (driver->state != STATE_PREPARED) return ASE_InvalidMode;
++
++    UNIX_CALL(asio_release, &params);
++    VirtualFree(driver->buffers, 0, MEM_RELEASE);
++    driver->buffers = NULL;
++    driver->callbacks = NULL;
++    driver->frames = 0;
++    driver->input_mask = driver->output_mask = 0;
++    driver->state = STATE_INITIALIZED;
++    return ASE_OK;
++}
++
++static INT_PTR CALLBACK panel_proc(HWND dialog, UINT msg, WPARAM wparam, LPARAM lparam)
++{
++    struct asio_driver *driver;
++    WCHAR format[64], text[96], ms[16], decimal[4];
++    UINT32 frames, tenths;
++    LRESULT item;
++
++    switch (msg)
++    {
++    case WM_INITDIALOG:
++        driver = (struct asio_driver *)lparam;
++        SetWindowLongPtrW(dialog, DWLP_USER, lparam);
++        if (!GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SDECIMAL, decimal, ARRAY_SIZE(decimal)))
++            lstrcpyW(decimal, L".");
++        load_string(IDS_SAMPLES, format, ARRAY_SIZE(format));
++        for (frames = 64; frames <= 1024; frames *= 2)
++        {
++            tenths = (frames * 10000 + driver->sample_rate / 2) / driver->sample_rate;
++            swprintf(ms, ARRAY_SIZE(ms), L"%u%s%u", tenths / 10, decimal, tenths % 10);
++            swprintf(text, ARRAY_SIZE(text), format, frames, ms);
++            item = SendDlgItemMessageW(dialog, IDC_BUFFER, CB_ADDSTRING, 0, (LPARAM)text);
++            SendDlgItemMessageW(dialog, IDC_BUFFER, CB_SETITEMDATA, item, frames);
++            if (frames == driver->preferred)
++                SendDlgItemMessageW(dialog, IDC_BUFFER, CB_SETCURSEL, item, 0);
++        }
++        load_string(IDS_RATE, format, ARRAY_SIZE(format));
++        swprintf(text, ARRAY_SIZE(text), format, driver->sample_rate);
++        SetDlgItemTextW(dialog, IDC_RATE, text);
++        return TRUE;
++
++    case WM_COMMAND:
++        if (LOWORD(wparam) == IDOK)
++        {
++            driver = (struct asio_driver *)GetWindowLongPtrW(dialog, DWLP_USER);
++            item = SendDlgItemMessageW(dialog, IDC_BUFFER, CB_GETCURSEL, 0, 0);
++            if (item != CB_ERR)
++            {
++                frames = SendDlgItemMessageW(dialog, IDC_BUFFER, CB_GETITEMDATA, item, 0);
++                if (frames != driver->preferred)
++                {
++                    driver->preferred = frames;
++                    RegSetKeyValueW(HKEY_CURRENT_USER, settings_key, L"Buffer size", REG_DWORD,
++                                    &frames, sizeof(frames));
++                    if (send_message(driver, kAsioSelectorSupported, kAsioResetRequest))
++                        send_message(driver, kAsioResetRequest, 0);
++                }
++            }
++            EndDialog(dialog, IDOK);
++            return TRUE;
++        }
++        if (LOWORD(wparam) == IDCANCEL)
++        {
++            EndDialog(dialog, IDCANCEL);
++            return TRUE;
++        }
++        break;
++    }
++    return FALSE;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_control_panel, 4)
++static LONG __thiscall asio_control_panel(struct asio_driver *driver)
++{
++    if (driver->state == STATE_LOADED) return ASE_NotPresent;
++    DialogBoxParamW(instance, MAKEINTRESOURCEW(IDD_PANEL), driver->window, panel_proc, (LPARAM)driver);
++    return ASE_OK;
++}
++
++DEFINE_THISCALL_WRAPPER(asio_future, 12)
++static LONG __thiscall asio_future(struct asio_driver *driver, LONG selector, void *opt)
++{
++    TRACE("%#x, %p\n", (int)selector, opt);
++
++    switch (selector)
++    {
++    case kAsioCanTimeInfo:
++    case kAsioCanReportOverload:
++        return ASE_SUCCESS;
++    case kAsioEnableTimeCodeRead:
++    case kAsioDisableTimeCodeRead:
++        return ASE_SUCCESS;
++    default:
++        return ASE_InvalidParameter;
++    }
++}
++
++DEFINE_THISCALL_WRAPPER(asio_output_ready, 4)
++static LONG __thiscall asio_output_ready(struct asio_driver *driver)
++{
++    /* outputs are taken when the buffer switch returns */
++    return ASE_NotPresent;
++}
++
++static const void * const driver_vtbl[] =
++{
++    driver_QueryInterface,
++    driver_AddRef,
++    driver_Release,
++    THISCALL(asio_init),
++    THISCALL(asio_get_driver_name),
++    THISCALL(asio_get_driver_version),
++    THISCALL(asio_get_error_message),
++    THISCALL(asio_start),
++    THISCALL(asio_stop),
++    THISCALL(asio_get_channels),
++    THISCALL(asio_get_latencies),
++    THISCALL(asio_get_buffer_size),
++    THISCALL(asio_can_sample_rate),
++    THISCALL(asio_get_sample_rate),
++    THISCALL(asio_set_sample_rate),
++    THISCALL(asio_get_clock_sources),
++    THISCALL(asio_set_clock_source),
++    THISCALL(asio_get_sample_position),
++    THISCALL(asio_get_channel_info),
++    THISCALL(asio_create_buffers),
++    THISCALL(asio_dispose_buffers),
++    THISCALL(asio_control_panel),
++    THISCALL(asio_future),
++    THISCALL(asio_output_ready),
++};
++
++static HRESULT WINAPI factory_QueryInterface(IClassFactory *iface, REFIID riid, void **obj)
++{
++    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IClassFactory))
++    {
++        *obj = iface;
++        return S_OK;
++    }
++    *obj = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI factory_AddRef(IClassFactory *iface)
++{
++    return 2;
++}
++
++static ULONG WINAPI factory_Release(IClassFactory *iface)
++{
++    return 1;
++}
++
++static HRESULT WINAPI factory_CreateInstance(IClassFactory *iface, IUnknown *outer, REFIID riid, void **obj)
++{
++    struct asio_driver *driver;
++
++    TRACE("%p, %s, %p\n", outer, debugstr_guid(riid), obj);
++
++    *obj = NULL;
++    if (outer) return CLASS_E_NOAGGREGATION;
++    /* hosts ask for the driver's class id as the interface */
++    if (!IsEqualIID(riid, &IID_IUnknown) && !IsEqualIID(riid, &CLSID_RayeASIO)) return E_NOINTERFACE;
++    if (!(driver = calloc(1, sizeof(*driver)))) return E_OUTOFMEMORY;
++    driver->vtbl = driver_vtbl;
++    driver->ref = 1;
++    *obj = driver;
++    return S_OK;
++}
++
++static HRESULT WINAPI factory_LockServer(IClassFactory *iface, BOOL lock)
++{
++    return S_OK;
++}
++
++static const IClassFactoryVtbl factory_vtbl =
++{
++    factory_QueryInterface,
++    factory_AddRef,
++    factory_Release,
++    factory_CreateInstance,
++    factory_LockServer,
++};
++
++static IClassFactory factory = { &factory_vtbl };
++
++HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void **obj)
++{
++    TRACE("%s, %s, %p\n", debugstr_guid(clsid), debugstr_guid(riid), obj);
++
++    if (!IsEqualGUID(clsid, &CLSID_RayeASIO)) return CLASS_E_CLASSNOTAVAILABLE;
++    return IClassFactory_QueryInterface(&factory, riid, obj);
++}
++
++HRESULT WINAPI DllCanUnloadNow(void)
++{
++    return S_FALSE;
++}
++
++static LSTATUS set_string(HKEY root, const WCHAR *key, const WCHAR *name, const WCHAR *value)
++{
++    return RegSetKeyValueW(root, key, name, REG_SZ, value, (lstrlenW(value) + 1) * sizeof(WCHAR));
++}
++
++HRESULT WINAPI DllRegisterServer(void)
++{
++    WCHAR key[80], path[MAX_PATH];
++
++    GetModuleFileNameW(instance, path, ARRAY_SIZE(path));
++    swprintf(key, ARRAY_SIZE(key), L"CLSID\\%s", clsid_string);
++    if (set_string(HKEY_CLASSES_ROOT, key, NULL, driver_name)) return SELFREG_E_CLASS;
++    lstrcatW(key, L"\\InprocServer32");
++    if (set_string(HKEY_CLASSES_ROOT, key, NULL, path) ||
++        set_string(HKEY_CLASSES_ROOT, key, L"ThreadingModel", L"Both"))
++        return SELFREG_E_CLASS;
++
++    swprintf(key, ARRAY_SIZE(key), L"Software\\ASIO\\%s", driver_name);
++    if (set_string(HKEY_LOCAL_MACHINE, key, L"CLSID", clsid_string) ||
++        set_string(HKEY_LOCAL_MACHINE, key, L"Description", driver_name))
++        return SELFREG_E_CLASS;
++    return S_OK;
++}
++
++HRESULT WINAPI DllUnregisterServer(void)
++{
++    WCHAR key[80];
++
++    swprintf(key, ARRAY_SIZE(key), L"CLSID\\%s", clsid_string);
++    RegDeleteTreeW(HKEY_CLASSES_ROOT, key);
++    swprintf(key, ARRAY_SIZE(key), L"Software\\ASIO\\%s", driver_name);
++    RegDeleteTreeW(HKEY_LOCAL_MACHINE, key);
++    return S_OK;
++}
++
++BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
++{
++    if (reason == DLL_PROCESS_ATTACH)
++    {
++        instance = inst;
++        DisableThreadLibraryCalls(inst);
++        return !__wine_init_unix_call();
++    }
++    return TRUE;
++}
+diff --git a/dlls/rayeasio/jack.c b/dlls/rayeasio/jack.c
+new file mode 100644
+index 0000000..b82e206
+--- /dev/null
++++ b/dlls/rayeasio/jack.c
+@@ -0,0 +1,759 @@
++/*
++ * Raye ASIO driver, sound server side
++ *
++ * The driver talks to PipeWire through its JACK library, which runs the
++ * whole duplex cycle in one callback at the graph's quantum. The host's
++ * buffer switch is PE code and cannot run on that thread, so the JACK
++ * thread hands each cycle to the host thread and waits for it.
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#include <time.h>
++#include <dlfcn.h>
++#include <pthread.h>
++#include <sched.h>
++#include <unistd.h>
++#include <sys/mman.h>
++#include <sys/syscall.h>
++#include <linux/futex.h>
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winternl.h"
++#include "wine/debug.h"
++
++#include "unixlib.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(asio);
++
++/* The few JACK declarations used here, so the build does not need the
++ * JACK headers. */
++typedef UINT32 jack_nframes_t;
++typedef struct jack_client jack_client_t;
++typedef struct jack_port jack_port_t;
++typedef struct { jack_nframes_t min, max; } jack_latency_range_t;
++
++#define JackNoStartServer   0x01
++#define JackPortIsInput     0x01
++#define JackPortIsOutput    0x02
++#define JackPortIsPhysical  0x04
++#define JackCaptureLatency  0
++#define JackPlaybackLatency 1
++#define JACK_DEFAULT_AUDIO_TYPE "32 bit float mono audio"
++
++#ifndef SCHED_RESET_ON_FORK
++#define SCHED_RESET_ON_FORK 0x40000000
++#endif
++
++#define JACK_FUNCS \
++    DO_FUNC(jack_client_t *, jack_client_open, (const char *, int, int *, ...)) \
++    DO_FUNC(int, jack_client_close, (jack_client_t *)) \
++    DO_FUNC(jack_nframes_t, jack_get_sample_rate, (jack_client_t *)) \
++    DO_FUNC(jack_nframes_t, jack_get_buffer_size, (jack_client_t *)) \
++    DO_FUNC(int, jack_set_buffer_size, (jack_client_t *, jack_nframes_t)) \
++    DO_FUNC(jack_port_t *, jack_port_register, (jack_client_t *, const char *, const char *, unsigned long, unsigned long)) \
++    DO_FUNC(void *, jack_port_get_buffer, (jack_port_t *, jack_nframes_t)) \
++    DO_FUNC(const char *, jack_port_name, (const jack_port_t *)) \
++    DO_FUNC(const char **, jack_port_get_connections, (const jack_port_t *)) \
++    DO_FUNC(void, jack_port_get_latency_range, (jack_port_t *, int, jack_latency_range_t *)) \
++    DO_FUNC(int, jack_set_process_callback, (jack_client_t *, int (*)(jack_nframes_t, void *), void *)) \
++    DO_FUNC(int, jack_set_buffer_size_callback, (jack_client_t *, int (*)(jack_nframes_t, void *), void *)) \
++    DO_FUNC(int, jack_set_sample_rate_callback, (jack_client_t *, int (*)(jack_nframes_t, void *), void *)) \
++    DO_FUNC(int, jack_set_latency_callback, (jack_client_t *, void (*)(int, void *), void *)) \
++    DO_FUNC(int, jack_activate, (jack_client_t *)) \
++    DO_FUNC(int, jack_deactivate, (jack_client_t *)) \
++    DO_FUNC(const char **, jack_get_ports, (jack_client_t *, const char *, const char *, unsigned long)) \
++    DO_FUNC(int, jack_connect, (jack_client_t *, const char *, const char *)) \
++    DO_FUNC(int, jack_disconnect, (jack_client_t *, const char *, const char *)) \
++    DO_FUNC(void, jack_free, (void *)) \
++    DO_FUNC(int, jack_client_real_time_priority, (jack_client_t *))
++
++#define DO_FUNC(ret, name, args) static ret (*p##name) args;
++JACK_FUNCS
++#undef DO_FUNC
++
++/* Just enough of libdbus to ask RealtimeKit for a realtime thread. */
++typedef struct { const char *name, *message; unsigned int dummy; void *padding; } DBusError;
++#define DBUS_BUS_SYSTEM    1
++#define DBUS_TYPE_INVALID  0
++#define DBUS_TYPE_UINT32   'u'
++#define DBUS_TYPE_UINT64   't'
++
++#define DBUS_FUNCS \
++    DO_FUNC(void, dbus_error_init, (DBusError *)) \
++    DO_FUNC(void, dbus_error_free, (DBusError *)) \
++    DO_FUNC(void *, dbus_bus_get_private, (int, DBusError *)) \
++    DO_FUNC(void, dbus_connection_close, (void *)) \
++    DO_FUNC(void, dbus_connection_unref, (void *)) \
++    DO_FUNC(void *, dbus_message_new_method_call, (const char *, const char *, const char *, const char *)) \
++    DO_FUNC(int, dbus_message_append_args, (void *, int, ...)) \
++    DO_FUNC(void *, dbus_connection_send_with_reply_and_block, (void *, void *, int, DBusError *)) \
++    DO_FUNC(void, dbus_message_unref, (void *))
++
++#define DO_FUNC(ret, name, args) static ret (*p##name) args;
++DBUS_FUNCS
++#undef DO_FUNC
++
++struct asio_client
++{
++    jack_client_t *jack;
++    unsigned int inputs, outputs;
++    jack_port_t *in_ports[ASIO_MAX_CHANNELS];
++    jack_port_t *out_ports[ASIO_MAX_CHANNELS];
++
++    /* set by prepare, read by the JACK thread */
++    jack_nframes_t frames;
++    UINT32 input_mask, output_mask;
++    float *in_bufs[ASIO_MAX_CHANNELS][2];
++    float *out_bufs[ASIO_MAX_CHANNELS][2];
++    BOOL active;
++
++    /* the cycle handshake, futex words */
++    int running;
++    int ready_seq;          /* bumped by the JACK thread when a cycle is ready */
++    int done_seq;           /* set by the host thread when it has filled the outputs */
++    int served_seq;         /* last cycle handed to the host thread */
++    unsigned int index;     /* buffer half of the cycle being served */
++    unsigned int next_index;
++    UINT64 position, next_position;
++    int flags;
++    int xruns;
++
++    /* following the default devices */
++    pthread_t follow_thread;
++    pthread_mutex_t follow_lock;
++    pthread_cond_t follow_cond;
++    BOOL follow_quit, follow_started;
++    char *linked_in[ASIO_MAX_CHANNELS];
++    char *linked_out[ASIO_MAX_CHANNELS];
++};
++
++static BOOL load_jack(void)
++{
++    /* Ask PipeWire's JACK library by path first: without it a JACK library
++     * that needs its own server could be found. */
++    static const char * const names[] =
++    {
++        "/usr/lib/x86_64-linux-gnu/pipewire-0.3/jack/libjack.so.0",
++        "/usr/lib64/pipewire-0.3/jack/libjack.so.0",
++        "/usr/lib/pipewire-0.3/jack/libjack.so.0",
++        "libjack.so.0",
++    };
++    static void *lib;
++    unsigned int i;
++
++    if (lib) return TRUE;
++    for (i = 0; i < ARRAY_SIZE(names) && !lib; i++)
++        lib = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
++    if (!lib)
++    {
++        ERR("no JACK library found\n");
++        return FALSE;
++    }
++
++#define DO_FUNC(ret, name, args) \
++    if (!(p##name = dlsym(lib, #name)) && strcmp(#name, "jack_client_real_time_priority")) \
++    { \
++        ERR("%s missing\n", #name); \
++        dlclose(lib); \
++        lib = NULL; \
++        return FALSE; \
++    }
++    JACK_FUNCS
++#undef DO_FUNC
++    return TRUE;
++}
++
++static int futex_wait(int *addr, int val, const struct timespec *timeout)
++{
++    return syscall(SYS_futex, addr, FUTEX_WAIT_PRIVATE, val, timeout, NULL, 0);
++}
++
++static void futex_wake(int *addr)
++{
++    syscall(SYS_futex, addr, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0);
++}
++
++static struct asio_client *get_client(UINT64 handle)
++{
++    return (struct asio_client *)(ULONG_PTR)handle;
++}
++
++static int process_cb(jack_nframes_t frames, void *arg)
++{
++    struct asio_client *client = arg;
++    struct timespec timeout, now;
++    long long deadline;
++    unsigned int i, index;
++    int seq;
++
++    if (!__atomic_load_n(&client->running, __ATOMIC_ACQUIRE) || frames != client->frames)
++    {
++        for (i = 0; i < client->outputs; i++)
++            memset(pjack_port_get_buffer(client->out_ports[i], frames), 0, frames * sizeof(float));
++        return 0;
++    }
++
++    index = client->next_index;
++    for (i = 0; i < client->inputs; i++)
++        if (client->input_mask & (1u << i))
++            memcpy(client->in_bufs[i][index], pjack_port_get_buffer(client->in_ports[i], frames),
++                   frames * sizeof(float));
++
++    client->index = index;
++    client->position = client->next_position;
++    seq = client->ready_seq + 1;
++    __atomic_store_n(&client->ready_seq, seq, __ATOMIC_RELEASE);
++    futex_wake(&client->ready_seq);
++
++    /* Give the host one period. Past that the cycle is lost anyway. */
++    clock_gettime(CLOCK_MONOTONIC, &now);
++    deadline = now.tv_sec * 1000000000LL + now.tv_nsec +
++               (long long)frames * 1000000000 / pjack_get_sample_rate(client->jack);
++    for (;;)
++    {
++        int done = __atomic_load_n(&client->done_seq, __ATOMIC_ACQUIRE);
++        long long left;
++
++        if (done == seq) break;
++        clock_gettime(CLOCK_MONOTONIC, &now);
++        left = deadline - (now.tv_sec * 1000000000LL + now.tv_nsec);
++        if (left <= 0)
++        {
++            for (i = 0; i < client->outputs; i++)
++                memset(pjack_port_get_buffer(client->out_ports[i], frames), 0, frames * sizeof(float));
++            __atomic_add_fetch(&client->xruns, 1, __ATOMIC_RELAXED);
++            __atomic_or_fetch(&client->flags, ASIO_CYCLE_XRUN, __ATOMIC_RELAXED);
++            goto next;
++        }
++        timeout.tv_sec = left / 1000000000;
++        timeout.tv_nsec = left % 1000000000;
++        futex_wait(&client->done_seq, done, &timeout);
++    }
++
++    for (i = 0; i < client->outputs; i++)
++    {
++        float *out = pjack_port_get_buffer(client->out_ports[i], frames);
++        if (client->output_mask & (1u << i))
++            memcpy(out, client->out_bufs[i][index], frames * sizeof(float));
++        else
++            memset(out, 0, frames * sizeof(float));
++    }
++
++next:
++    client->next_index = index ^ 1;
++    client->next_position += frames;
++    return 0;
++}
++
++static int buffer_size_cb(jack_nframes_t frames, void *arg)
++{
++    struct asio_client *client = arg;
++
++    if (__atomic_load_n(&client->running, __ATOMIC_ACQUIRE) && frames != client->frames)
++    {
++        __atomic_or_fetch(&client->flags, ASIO_CYCLE_RESET, __ATOMIC_RELAXED);
++        futex_wake(&client->ready_seq);
++    }
++    return 0;
++}
++
++static int sample_rate_cb(jack_nframes_t rate, void *arg)
++{
++    struct asio_client *client = arg;
++
++    __atomic_or_fetch(&client->flags, ASIO_CYCLE_RATE, __ATOMIC_RELAXED);
++    return 0;
++}
++
++static void latency_cb(int mode, void *arg)
++{
++    struct asio_client *client = arg;
++
++    __atomic_or_fetch(&client->flags, ASIO_CYCLE_LATENCY, __ATOMIC_RELAXED);
++}
++
++/* Ports of the default output or input, in channel order. PipeWire's JACK
++ * library also answers to "system:playback_N" and "system:capture_N" for
++ * the ports of whatever device is the default right now. */
++static char **default_device_ports(jack_client_t *jack, BOOL capture, unsigned int *count)
++{
++    const char **ports;
++    char **ret;
++    unsigned int n = 0;
++
++    *count = 0;
++    ports = pjack_get_ports(jack, capture ? "^system:capture_" : "^system:playback_", "audio",
++                            capture ? JackPortIsOutput : JackPortIsInput);
++    if (!ports) return NULL;
++    if ((ret = calloc(ASIO_MAX_CHANNELS + 1, sizeof(*ret))))
++        for (n = 0; ports[n] && n < ASIO_MAX_CHANNELS; n++) ret[n] = strdup(ports[n]);
++    pjack_free(ports);
++    *count = n;
++    return ret;
++}
++
++static void free_port_list(char **list)
++{
++    unsigned int i;
++
++    if (!list) return;
++    for (i = 0; list[i]; i++) free(list[i]);
++    free(list);
++}
++
++static void relink(struct asio_client *client, jack_port_t *port, char **linked, const char *want, BOOL capture)
++{
++    const char *ours = pjack_port_name(port);
++
++    if (*linked && want && !strcmp(*linked, want)) return;
++    if (*linked)
++    {
++        if (capture) pjack_disconnect(client->jack, *linked, ours);
++        else pjack_disconnect(client->jack, ours, *linked);
++        free(*linked);
++        *linked = NULL;
++    }
++    if (!want) return;
++    if (!(capture ? pjack_connect(client->jack, want, ours) : pjack_connect(client->jack, ours, want)))
++        *linked = strdup(want);
++}
++
++/* Keep our ports linked to the default devices. Only the links made here
++ * move; links the user made to anything else stay where they are. */
++static void follow_defaults(struct asio_client *client)
++{
++    char **outs, **ins;
++    unsigned int n_out, n_in, i;
++
++    outs = default_device_ports(client->jack, FALSE, &n_out);
++    ins = default_device_ports(client->jack, TRUE, &n_in);
++
++    /* A mono device gets every channel, otherwise channel i goes to port i. */
++    for (i = 0; i < client->outputs; i++)
++        relink(client, client->out_ports[i], &client->linked_out[i],
++               n_out == 1 ? outs[0] : i < n_out ? outs[i] : NULL, FALSE);
++    for (i = 0; i < client->inputs; i++)
++        relink(client, client->in_ports[i], &client->linked_in[i],
++               n_in == 1 ? ins[0] : i < n_in ? ins[i] : NULL, TRUE);
++
++    free_port_list(outs);
++    free_port_list(ins);
++}
++
++static void *follow_thread(void *arg)
++{
++    struct asio_client *client = arg;
++    struct timespec ts;
++
++    pthread_mutex_lock(&client->follow_lock);
++    while (!client->follow_quit)
++    {
++        pthread_mutex_unlock(&client->follow_lock);
++        follow_defaults(client);
++        pthread_mutex_lock(&client->follow_lock);
++
++        clock_gettime(CLOCK_REALTIME, &ts);
++        ts.tv_sec += 1;
++        while (!client->follow_quit &&
++               pthread_cond_timedwait(&client->follow_cond, &client->follow_lock, &ts) != ETIMEDOUT)
++            ;
++    }
++    pthread_mutex_unlock(&client->follow_lock);
++    return NULL;
++}
++
++static unsigned int default_channels(jack_client_t *jack, BOOL capture)
++{
++    unsigned int n;
++
++    free_port_list(default_device_ports(jack, capture, &n));
++    return n;
++}
++
++static NTSTATUS asio_open(void *args)
++{
++    struct asio_open_params *params = args;
++    struct asio_client *client;
++    char name[16];
++    unsigned int i;
++    int status;
++
++    params->result = STATUS_UNSUCCESSFUL;
++    if (!load_jack()) return STATUS_SUCCESS;
++    if (!(client = calloc(1, sizeof(*client)))) return STATUS_SUCCESS;
++
++    /* The buffer size is forced on the graph when the host creates its
++     * buffers, so nothing to ask for here. */
++    if (!(client->jack = pjack_client_open(params->client_name, JackNoStartServer, &status)))
++    {
++        WARN("could not open a client, status %#x\n", status);
++        free(client);
++        return STATUS_SUCCESS;
++    }
++
++    client->inputs = params->inputs;
++    client->outputs = params->outputs;
++    if (!client->inputs) client->inputs = max(2, default_channels(client->jack, TRUE));
++    if (!client->outputs) client->outputs = max(2, default_channels(client->jack, FALSE));
++    client->inputs = min(client->inputs, ASIO_MAX_CHANNELS);
++    client->outputs = min(client->outputs, ASIO_MAX_CHANNELS);
++
++    for (i = 0; i < client->inputs; i++)
++    {
++        snprintf(name, sizeof(name), "in_%u", i + 1);
++        client->in_ports[i] = pjack_port_register(client->jack, name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
++    }
++    for (i = 0; i < client->outputs; i++)
++    {
++        snprintf(name, sizeof(name), "out_%u", i + 1);
++        client->out_ports[i] = pjack_port_register(client->jack, name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
++    }
++
++    pjack_set_process_callback(client->jack, process_cb, client);
++    pjack_set_buffer_size_callback(client->jack, buffer_size_cb, client);
++    pjack_set_sample_rate_callback(client->jack, sample_rate_cb, client);
++    pjack_set_latency_callback(client->jack, latency_cb, client);
++    pthread_mutex_init(&client->follow_lock, NULL);
++    pthread_cond_init(&client->follow_cond, NULL);
++
++    params->handle = (UINT64)(ULONG_PTR)client;
++    params->sample_rate = pjack_get_sample_rate(client->jack);
++    params->current_size = pjack_get_buffer_size(client->jack);
++    params->inputs = client->inputs;
++    params->outputs = client->outputs;
++    params->result = STATUS_SUCCESS;
++    TRACE("client %p: %u in, %u out, %u Hz, %u frames\n", client, client->inputs, client->outputs,
++          params->sample_rate, params->current_size);
++    return STATUS_SUCCESS;
++}
++
++static void stop_following(struct asio_client *client)
++{
++    if (!client->follow_started) return;
++    pthread_mutex_lock(&client->follow_lock);
++    client->follow_quit = TRUE;
++    pthread_cond_signal(&client->follow_cond);
++    pthread_mutex_unlock(&client->follow_lock);
++    pthread_join(client->follow_thread, NULL);
++    client->follow_started = FALSE;
++}
++
++static void unlock_buffers(struct asio_client *client)
++{
++    unsigned int i;
++
++    for (i = 0; i < ASIO_MAX_CHANNELS; i++)
++    {
++        if (client->in_bufs[i][0]) munlock(client->in_bufs[i][0], client->frames * sizeof(float) * 2);
++        if (client->out_bufs[i][0]) munlock(client->out_bufs[i][0], client->frames * sizeof(float) * 2);
++    }
++    memset(client->in_bufs, 0, sizeof(client->in_bufs));
++    memset(client->out_bufs, 0, sizeof(client->out_bufs));
++}
++
++static NTSTATUS asio_release(void *args)
++{
++    struct asio_handle_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++
++    __atomic_store_n(&client->running, 0, __ATOMIC_RELEASE);
++    futex_wake(&client->ready_seq);
++    stop_following(client);
++    if (client->active)
++    {
++        unsigned int i;
++
++        pjack_deactivate(client->jack);
++        client->active = FALSE;
++        for (i = 0; i < ASIO_MAX_CHANNELS; i++)
++        {
++            free(client->linked_in[i]);
++            free(client->linked_out[i]);
++            client->linked_in[i] = client->linked_out[i] = NULL;
++        }
++    }
++    unlock_buffers(client);
++    client->frames = 0;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS asio_close(void *args)
++{
++    struct asio_handle_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++
++    asio_release(args);
++    pjack_client_close(client->jack);
++    pthread_mutex_destroy(&client->follow_lock);
++    pthread_cond_destroy(&client->follow_cond);
++    free(client);
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS asio_get_info(void *args)
++{
++    struct asio_info_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++    jack_latency_range_t range;
++
++    params->sample_rate = pjack_get_sample_rate(client->jack);
++    params->buffer_size = pjack_get_buffer_size(client->jack);
++    params->inputs = client->inputs;
++    params->outputs = client->outputs;
++    pjack_port_get_latency_range(client->in_ports[0], JackCaptureLatency, &range);
++    params->input_latency = range.max;
++    pjack_port_get_latency_range(client->out_ports[0], JackPlaybackLatency, &range);
++    params->output_latency = range.max;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS asio_prepare(void *args)
++{
++    struct asio_prepare_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++    unsigned int i, waited;
++
++    params->result = STATUS_UNSUCCESSFUL;
++    if (client->active) return STATUS_SUCCESS;
++
++    /* Before activation the library reports the latency we asked for, not
++     * the graph's quantum, so always force it. */
++    if (pjack_set_buffer_size(client->jack, params->frames))
++    {
++        WARN("could not set the buffer size to %u\n", params->frames);
++        return STATUS_SUCCESS;
++    }
++
++    client->frames = params->frames;
++    client->input_mask = params->input_mask;
++    client->output_mask = params->output_mask;
++    for (i = 0; i < ASIO_MAX_CHANNELS; i++)
++    {
++        client->in_bufs[i][0] = (float *)(ULONG_PTR)params->inputs[i][0];
++        client->in_bufs[i][1] = (float *)(ULONG_PTR)params->inputs[i][1];
++        client->out_bufs[i][0] = (float *)(ULONG_PTR)params->outputs[i][0];
++        client->out_bufs[i][1] = (float *)(ULONG_PTR)params->outputs[i][1];
++        /* both halves are one block; keep it out of swap for the RT thread */
++        if (client->in_bufs[i][0]) mlock(client->in_bufs[i][0], client->frames * sizeof(float) * 2);
++        if (client->out_bufs[i][0]) mlock(client->out_bufs[i][0], client->frames * sizeof(float) * 2);
++    }
++    client->running = 0;
++    client->next_index = 0;
++    client->next_position = 0;
++    client->flags = 0;
++    client->xruns = 0;
++
++    if (pjack_activate(client->jack))
++    {
++        WARN("could not activate the client\n");
++        unlock_buffers(client);
++        client->frames = 0;
++        return STATUS_SUCCESS;
++    }
++    client->active = TRUE;
++
++    /* The new quantum takes a moment to reach the graph. */
++    for (waited = 0; waited < 1000 && pjack_get_buffer_size(client->jack) != params->frames; waited += 10)
++        usleep(10000);
++    if (pjack_get_buffer_size(client->jack) != params->frames)
++        WARN("graph runs at %u frames, not %u\n", pjack_get_buffer_size(client->jack), params->frames);
++
++    follow_defaults(client);
++    client->follow_quit = FALSE;
++    if (!pthread_create(&client->follow_thread, NULL, follow_thread, client))
++        client->follow_started = TRUE;
++
++    params->result = STATUS_SUCCESS;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS asio_run(void *args)
++{
++    struct asio_run_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++
++    if (params->running)
++    {
++        client->served_seq = client->ready_seq;
++        client->done_seq = client->ready_seq;
++        client->xruns = 0;
++        client->flags = 0;
++        __atomic_store_n(&client->running, 1, __ATOMIC_RELEASE);
++    }
++    else
++    {
++        __atomic_store_n(&client->running, 0, __ATOMIC_RELEASE);
++        /* release a JACK thread that waits for this host thread, and the
++         * host thread itself */
++        __atomic_store_n(&client->done_seq, client->ready_seq, __ATOMIC_RELEASE);
++        futex_wake(&client->done_seq);
++        futex_wake(&client->ready_seq);
++    }
++    return STATUS_SUCCESS;
++}
++
++static BOOL load_dbus(void)
++{
++    static void *lib;
++
++    if (lib) return TRUE;
++    if (!(lib = dlopen("libdbus-1.so.3", RTLD_NOW | RTLD_LOCAL))) return FALSE;
++#define DO_FUNC(ret, name, args) \
++    if (!(p##name = dlsym(lib, #name))) { dlclose(lib); lib = NULL; return FALSE; }
++    DBUS_FUNCS
++#undef DO_FUNC
++    return TRUE;
++}
++
++/* Without RLIMIT_RTPRIO a desktop user gets realtime threads through
++ * RealtimeKit, which wants the kernel thread id. PipeWire's own library
++ * only does this for threads it started itself. */
++static BOOL rtkit_make_realtime(UINT32 prio)
++{
++    UINT64 tid = syscall(SYS_gettid);
++    void *conn, *msg, *reply = NULL;
++    DBusError err;
++
++    if (!load_dbus()) return FALSE;
++    pdbus_error_init(&err);
++    if (!(conn = pdbus_bus_get_private(DBUS_BUS_SYSTEM, &err)))
++    {
++        pdbus_error_free(&err);
++        return FALSE;
++    }
++    if ((msg = pdbus_message_new_method_call("org.freedesktop.RealtimeKit1", "/org/freedesktop/RealtimeKit1",
++                                             "org.freedesktop.RealtimeKit1", "MakeThreadRealtime")))
++    {
++        if (pdbus_message_append_args(msg, DBUS_TYPE_UINT64, &tid, DBUS_TYPE_UINT32, &prio, DBUS_TYPE_INVALID))
++            reply = pdbus_connection_send_with_reply_and_block(conn, msg, 1000, &err);
++        pdbus_message_unref(msg);
++    }
++    if (reply) pdbus_message_unref(reply);
++    else
++    {
++        if (err.message) WARN("RealtimeKit: %s\n", err.message);
++        pdbus_error_free(&err);
++    }
++    pdbus_connection_close(conn);
++    pdbus_connection_unref(conn);
++    return reply != NULL;
++}
++
++/* RT priority for the host thread, which does the actual audio work. */
++static NTSTATUS asio_realtime(void *args)
++{
++    struct asio_handle_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++    struct sched_param param = { 0 };
++    int prio = 0;
++
++    if (pjack_client_real_time_priority) prio = pjack_client_real_time_priority(client->jack);
++    if (prio <= 0) prio = 20;
++    else if (prio > 1) prio--;   /* just below the graph's own thread */
++
++    param.sched_priority = prio;
++    if (!pthread_setschedparam(pthread_self(), SCHED_FIFO | SCHED_RESET_ON_FORK, &param))
++        return STATUS_SUCCESS;
++    /* RealtimeKit allows 20 at most by default */
++    if (rtkit_make_realtime(min(prio, 20)))
++        return STATUS_SUCCESS;
++    WARN("no realtime priority for the host thread\n");
++    return STATUS_UNSUCCESSFUL;
++}
++
++static NTSTATUS asio_cycle(void *args)
++{
++    struct asio_cycle_params *params = args;
++    struct asio_client *client = get_client(params->handle);
++    struct timespec timeout = { 0, 100000000 };
++    int ready;
++
++    if (params->done)
++    {
++        __atomic_store_n(&client->done_seq, client->served_seq, __ATOMIC_RELEASE);
++        futex_wake(&client->done_seq);
++    }
++
++    for (;;)
++    {
++        params->flags = __atomic_exchange_n(&client->flags, 0, __ATOMIC_ACQ_REL);
++        if (!__atomic_load_n(&client->running, __ATOMIC_ACQUIRE)) params->flags |= ASIO_CYCLE_STOP;
++        if (params->flags & (ASIO_CYCLE_STOP | ASIO_CYCLE_RESET))
++        {
++            params->index = 0;
++            params->position = 0;
++            return STATUS_SUCCESS;
++        }
++        ready = __atomic_load_n(&client->ready_seq, __ATOMIC_ACQUIRE);
++        if (ready != client->served_seq) break;
++        if (params->flags) return STATUS_SUCCESS;
++        futex_wait(&client->ready_seq, ready, &timeout);
++    }
++
++    client->served_seq = ready;
++    params->flags |= ASIO_CYCLE_READY;
++    params->index = client->index;
++    params->position = client->position;
++    params->sample_rate = pjack_get_sample_rate(client->jack);
++    params->xruns = __atomic_load_n(&client->xruns, __ATOMIC_RELAXED);
++    return STATUS_SUCCESS;
++}
++
++const unixlib_entry_t __wine_unix_call_funcs[] =
++{
++    asio_open,
++    asio_close,
++    asio_get_info,
++    asio_prepare,
++    asio_release,
++    asio_run,
++    asio_realtime,
++    asio_cycle,
++};
++
++C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_asio_funcs_count);
++
++#ifdef _WIN64
++
++/* The parameter structures have the same layout for 32-bit callers. */
++const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
++{
++    asio_open,
++    asio_close,
++    asio_get_info,
++    asio_prepare,
++    asio_release,
++    asio_run,
++    asio_realtime,
++    asio_cycle,
++};
++
++C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_asio_funcs_count);
++
++#endif
+diff --git a/dlls/rayeasio/rayeasio.rc b/dlls/rayeasio/rayeasio.rc
+new file mode 100644
+index 0000000..0ee4e4f
+--- /dev/null
++++ b/dlls/rayeasio/rayeasio.rc
+@@ -0,0 +1,75 @@
++/*
++ * Raye ASIO driver resources
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include "windef.h"
++#include "winuser.h"
++#include "resource.h"
++
++#pragma code_page(65001)
++
++LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
++
++IDD_PANEL DIALOGEX 0, 0, 220, 94
++STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
++CAPTION "Raye ASIO"
++FONT 9, "MS Shell Dlg"
++{
++    LTEXT "Buffer size", -1, 10, 10, 200, 10
++    COMBOBOX IDC_BUFFER, 10, 22, 200, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
++    LTEXT "", IDC_RATE, 10, 40, 200, 10
++    LTEXT "Smaller is faster to respond. Pick a larger size if the sound crackles.", IDC_HINT, 10, 52, 200, 18
++    DEFPUSHBUTTON "OK", IDOK, 106, 74, 50, 14
++    PUSHBUTTON "Cancel", IDCANCEL, 160, 74, 50, 14
++}
++
++STRINGTABLE
++{
++    IDS_SAMPLES   "%u samples (%s ms)"
++    IDS_RATE      "Sample rate: %u Hz"
++    IDS_INPUT     "Input %u"
++    IDS_OUTPUT    "Output %u"
++    IDS_INTERNAL  "Internal"
++    IDS_NO_SERVER "The sound system is not running."
++}
++
++LANGUAGE LANG_FRENCH, SUBLANG_NEUTRAL
++
++IDD_PANEL DIALOGEX 0, 0, 220, 94
++STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
++CAPTION "Raye ASIO"
++FONT 9, "MS Shell Dlg"
++{
++    LTEXT "Taille du tampon", -1, 10, 10, 200, 10
++    COMBOBOX IDC_BUFFER, 10, 22, 200, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
++    LTEXT "", IDC_RATE, 10, 40, 200, 10
++    LTEXT "Plus petit, le son répond plus vite. Choisissez plus grand si le son grésille.", IDC_HINT, 10, 52, 200, 18
++    DEFPUSHBUTTON "OK", IDOK, 106, 74, 50, 14
++    PUSHBUTTON "Annuler", IDCANCEL, 160, 74, 50, 14
++}
++
++STRINGTABLE
++{
++    IDS_SAMPLES   "%u échantillons (%s ms)"
++    IDS_RATE      "Fréquence : %u Hz"
++    IDS_INPUT     "Entrée %u"
++    IDS_OUTPUT    "Sortie %u"
++    IDS_INTERNAL  "Interne"
++    IDS_NO_SERVER "Le système audio n’est pas lancé."
++}
+diff --git a/dlls/rayeasio/rayeasio.spec b/dlls/rayeasio/rayeasio.spec
+new file mode 100644
+index 0000000..b16365d
+--- /dev/null
++++ b/dlls/rayeasio/rayeasio.spec
+@@ -0,0 +1,4 @@
++@ stdcall -private DllCanUnloadNow()
++@ stdcall -private DllGetClassObject(ptr ptr ptr)
++@ stdcall -private DllRegisterServer()
++@ stdcall -private DllUnregisterServer()
+diff --git a/dlls/rayeasio/resource.h b/dlls/rayeasio/resource.h
+new file mode 100644
+index 0000000..3285a4e
+--- /dev/null
++++ b/dlls/rayeasio/resource.h
+@@ -0,0 +1,31 @@
++/*
++ * Raye ASIO driver resources
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#define IDD_PANEL           100
++#define IDC_BUFFER          101
++#define IDC_RATE            102
++#define IDC_HINT            103
++
++#define IDS_SAMPLES         200
++#define IDS_RATE            201
++#define IDS_INPUT           202
++#define IDS_OUTPUT          203
++#define IDS_INTERNAL        204
++#define IDS_NO_SERVER       205
+diff --git a/dlls/rayeasio/unixlib.h b/dlls/rayeasio/unixlib.h
+new file mode 100644
+index 0000000..1a8f2cf
+--- /dev/null
++++ b/dlls/rayeasio/unixlib.h
+@@ -0,0 +1,102 @@
++/*
++ * Raye ASIO driver, interface between the PE and unix sides
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include "wine/unixlib.h"
++
++/* Every field has the same size in 32-bit and 64-bit code, so the WoW64
++ * side uses the same entry points. Pointers travel as UINT64. */
++
++#define ASIO_MAX_CHANNELS 32
++
++struct asio_open_params
++{
++    char client_name[64];
++    UINT32 inputs;          /* 0: as many as the default input has, at least 2 */
++    UINT32 outputs;
++    UINT64 handle;          /* out */
++    UINT32 sample_rate;     /* out */
++    UINT32 current_size;    /* out */
++    NTSTATUS result;        /* out */
++};
++
++struct asio_handle_params
++{
++    UINT64 handle;
++};
++
++struct asio_info_params
++{
++    UINT64 handle;
++    UINT32 sample_rate;
++    UINT32 buffer_size;
++    UINT32 inputs;
++    UINT32 outputs;
++    UINT32 input_latency;
++    UINT32 output_latency;
++};
++
++struct asio_prepare_params
++{
++    UINT64 handle;
++    UINT32 frames;
++    UINT32 input_mask;      /* channels the host created buffers for */
++    UINT32 output_mask;
++    UINT64 inputs[ASIO_MAX_CHANNELS][2];   /* float buffers, double buffered */
++    UINT64 outputs[ASIO_MAX_CHANNELS][2];
++    NTSTATUS result;
++};
++
++struct asio_run_params
++{
++    UINT64 handle;
++    UINT32 running;
++};
++
++/* asio_cycle flags */
++#define ASIO_CYCLE_STOP          0x01
++#define ASIO_CYCLE_RESET         0x02  /* buffer size changed */
++#define ASIO_CYCLE_LATENCY       0x04
++#define ASIO_CYCLE_RATE          0x08
++#define ASIO_CYCLE_XRUN          0x10
++#define ASIO_CYCLE_READY         0x20  /* index and position are valid */
++
++struct asio_cycle_params
++{
++    UINT64 handle;
++    UINT32 done;            /* in: the host has filled the outputs of the last cycle */
++    UINT32 index;           /* out: buffer half to process */
++    UINT64 position;        /* out: sample position at the start of the cycle */
++    UINT32 sample_rate;     /* out */
++    UINT32 flags;           /* out */
++    UINT32 xruns;           /* out: cycles missed since start */
++};
++
++enum asio_funcs
++{
++    unix_asio_open,
++    unix_asio_close,
++    unix_asio_get_info,
++    unix_asio_prepare,
++    unix_asio_release,
++    unix_asio_run,
++    unix_asio_realtime,
++    unix_asio_cycle,
++    unix_asio_funcs_count,
++};
+diff --git a/loader/wine.inf.in b/loader/wine.inf.in
+index d6fa053..f28b459 100644
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -713,6 +713,7 @@ HKLM,SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x86,"Version",2,"14.51.362
+ 11,,msvproc.dll,1
+ 11,,qcap.dll,1
+ 11,,qedit.dll,1
++11,,rayeasio.dll,1
+ 11,,resampledmo.dll,1
+ 11,,urlmon.dll,1
+ 11,,vidreszr.dll,1

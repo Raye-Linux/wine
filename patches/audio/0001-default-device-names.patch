@@ -1,0 +1,52 @@
+Subject: winepulse: plain names for the default sound devices
+
+Every program's device list starts with the two devices that follow the
+system's default output and input. They were named after the sound
+server ("PulseAudio Output"). Call them "Default output" and "Default
+input", or "Sortie par défaut" and "Entrée par défaut" when the session
+is in French. The names keep a space; Burnout Paradise needs one.
+---
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 0539a46..fea1825 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -811,11 +811,25 @@ static void pulse_probe_settings(int render, const char *pulse_name, WAVEFORMATE
+  * have to do as much as possible without creating a new thread. this function
+  * sets up a synchronous connection to verify the server is running and query
+  * static data. */
++/* Names of the endpoints that follow the system default devices. The unix
++ * side has no access to the Windows UI language, so go by the locale the
++ * session was started with. */
++static BOOL locale_is_french(void)
++{
++    const char *lang;
++
++    if (!(lang = getenv("LC_ALL")) || !lang[0])
++        if (!(lang = getenv("LC_MESSAGES")) || !lang[0])
++            lang = getenv("LANG");
++    return lang && !strncmp(lang, "fr", 2);
++}
++
+ static NTSTATUS pulse_test_connect(void *args)
+ {
+     struct test_connect_params *params = args;
+     PhysDevice *dev;
+     pa_operation *o;
++    BOOL french;
+     int ret;
+     char *name = wstr_to_str(params->name);
+ 
+@@ -866,8 +880,11 @@ static NTSTATUS pulse_test_connect(void *args)
+     list_init(&g_phys_sources);
+ 
+     /* Burnout Paradise Remastered expects device name to have a space. */
+-    pulse_add_device(&g_phys_speakers, NULL, 0, Speakers, 0, "", "PulseAudio Output");
+-    pulse_add_device(&g_phys_sources, NULL, 0, Microphone, 0, "", "PulseAudio Input");
++    french = locale_is_french();
++    pulse_add_device(&g_phys_speakers, NULL, 0, Speakers, 0, "",
++                     french ? "Sortie par défaut" : "Default output");
++    pulse_add_device(&g_phys_sources, NULL, 0, Microphone, 0, "",
++                     french ? "Entrée par défaut" : "Default input");
+ 
+     o = pa_context_get_sink_info_list(pulse_ctx, &pulse_phys_speakers_cb, NULL);
+     if (o) {

@@ -1,0 +1,11 @@
+# Files shipped inside raye-wine, checked by SHA-256 before use.
+# dxvk-src is built from source (the capture patches change its dxgi):
+# its third column is the commit of the release tag, checked with git,
+# and the submodules come pinned by that commit.
+# kind     version  sha256 (or commit)                                                url
+dxvk-src   3.1.1    b1a1c99ab52b687cf950d62c88bc2fa316b41663                          https://github.com/doitsujin/dxvk.git
+vkd3d      3.1      b85ea8219b71093a3924913dd7aae6172333dc0c069983ed510816d67f02120b  https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v3.1/vkd3d-proton-3.1.tar.zst
+nvapi      0.9.3    284033c38e463ba31d40466d650d0c411df6f64bbf8ed3d19c9ca0cadf31dfd3  https://github.com/jp7677/dxvk-nvapi/releases/download/v0.9.3/dxvk-nvapi-v0.9.3.tar.gz
+mono       11.3.0   54a1b0111c3fe4b785eae688af94d27e64995707ad648b6fee8000381b80d298  https://dl.winehq.org/wine/wine-mono/11.3.0/wine-mono-11.3.0-x86.tar.xz
+gecko32    2.47.4   2cfc8d5c948602e21eff8a78613e1826f2d033df9672cace87fed56e8310afb6  https://dl.winehq.org/wine/wine-gecko/2.47.4/wine-gecko-2.47.4-x86.tar.xz
+gecko64    2.47.4   fd88fc7e537d058d7a8abf0c1ebc90c574892a466de86706a26d254710a82814  https://dl.winehq.org/wine/wine-gecko/2.47.4/wine-gecko-2.47.4-x86_64.tar.xz

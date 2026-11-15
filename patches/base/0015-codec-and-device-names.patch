@@ -1,0 +1,338 @@
+Subject: Codec, MCI and device names without the project name
+
+The ACM codec list showed "Wine MS ADPCM converter", "Wine G711
+converter", "Wine MPEG3 decoder" and "Wine GSM 6.10 libgsm codec", with
+"Brought to you by the Wine team..." as the copyright of five codecs and
+"Wine Driver" over their settings box. DirectDraw listed its devices as
+"Wine D3D7 T&L HAL", the C++ runtime error box was the "Wine C++ Runtime
+Library", and WMI named the sound card and the disks after Wine too.
+---
+diff --git a/dlls/ddraw/ddraw.c b/dlls/ddraw/ddraw.c
+index 8814c32..8bb586e 100644
+--- a/dlls/ddraw/ddraw.c
++++ b/dlls/ddraw/ddraw.c
+@@ -53,20 +53,20 @@ static struct enum_device_entry
+ } device_list7[] =
+ {
+     {
+-        "WINE Direct3D7 RGB Software Emulation using WineD3D",
++        "Direct3D7 RGB Software Emulation",
+         "RGB Emulation",
+         &IID_IDirect3DRGBDevice,
+         D3DDEVCAPS_HWTRANSFORMANDLIGHT | D3DDEVCAPS_DRAWPRIMITIVES2EX | D3DDEVCAPS_HWRASTERIZATION,
+     },
+     {
+-        "WINE Direct3D7 Hardware acceleration using WineD3D",
++        "Direct3D7 Hardware acceleration",
+         "Direct3D HAL",
+         &IID_IDirect3DHALDevice,
+         D3DDEVCAPS_HWTRANSFORMANDLIGHT,
+     },
+     {
+-        "WINE Direct3D7 Hardware Transform and Lighting acceleration using WineD3D",
+-        "Wine D3D7 T&L HAL",
++        "Direct3D7 Hardware Transform and Lighting acceleration",
++        "Direct3D T&L HAL",
+         &IID_IDirect3DTnLHalDevice,
+         0,
+     },
+@@ -3850,7 +3850,7 @@ static HRESULT WINAPI d3d7_EnumDevices(IDirect3D7 *iface, LPD3DENUMDEVICESCALLBA
+ static HRESULT enum_devices_d3d3(struct ddraw *ddraw, LPD3DENUMDEVICESCALLBACK callback,
+         void *context, unsigned int version, DWORD desc_size)
+ {
+-    static CHAR wined3d_description[] = "Wine D3DDevice using WineD3D and OpenGL";
++    static CHAR wined3d_description[64] = "Direct3D HAL";
+     D3DDEVICEDESC device_desc1, hal_desc, hel_desc;
+     D3DDEVICEDESC7 device_desc7;
+     HRESULT hr;
+diff --git a/dlls/imaadp32.acm/imaadp32.c b/dlls/imaadp32.acm/imaadp32.c
+index 0b5e6a8..b7899c8 100644
+--- a/dlls/imaadp32.acm/imaadp32.c
++++ b/dlls/imaadp32.acm/imaadp32.c
+@@ -533,7 +533,7 @@ static	LRESULT ADPCM_DriverDetails(PACMDRIVERDETAILSW add)
+                          add->szShortName, ARRAY_SIZE(add->szShortName) );
+     MultiByteToWideChar( CP_ACP, 0, "Microsoft IMA ADPCM CODEC", -1,
+                          add->szLongName, ARRAY_SIZE(add->szLongName) );
+-    MultiByteToWideChar( CP_ACP, 0, "Brought to you by the Wine team...", -1,
++    MultiByteToWideChar( CP_ACP, 0, "", -1,
+                          add->szCopyright, ARRAY_SIZE(add->szCopyright) );
+     MultiByteToWideChar( CP_ACP, 0, "Refer to LICENSE file", -1,
+                          add->szLicensing, ARRAY_SIZE(add->szLicensing) );
+@@ -935,7 +935,7 @@ LRESULT CALLBACK ADPCM_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "MSACM IMA ADPCM filter !", "Wine Driver", MB_OK); return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "IMA ADPCM codec", "Microsoft IMA ADPCM Codec", MB_OK); return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+ 
+diff --git a/dlls/l3codeca.acm/mpegl3.c b/dlls/l3codeca.acm/mpegl3.c
+index b5b0f80..db705ca 100644
+--- a/dlls/l3codeca.acm/mpegl3.c
++++ b/dlls/l3codeca.acm/mpegl3.c
+@@ -249,9 +249,9 @@ static	LRESULT MPEG3_DriverDetails(PACMDRIVERDETAILSW add)
+     add->hicon = NULL;
+     MultiByteToWideChar( CP_ACP, 0, "MPEG Layer-3 Codec", -1,
+                          add->szShortName, ARRAY_SIZE( add->szShortName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Wine MPEG3 decoder", -1,
++    MultiByteToWideChar( CP_ACP, 0, "MPEG Layer-3 Decoder", -1,
+                          add->szLongName, ARRAY_SIZE( add->szLongName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Brought to you by the Wine team...", -1,
++    MultiByteToWideChar( CP_ACP, 0, "", -1,
+                          add->szCopyright, ARRAY_SIZE( add->szCopyright ));
+     MultiByteToWideChar( CP_ACP, 0, "Refer to LICENSE file", -1,
+                          add->szLicensing, ARRAY_SIZE( add->szLicensing ));
+@@ -548,7 +548,7 @@ LRESULT CALLBACK MPEG3_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "MPEG3 filter !", "Wine Driver", MB_OK); return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "MPEG Layer-3 decoder", "MPEG Layer-3 Decoder", MB_OK); return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+ 
+diff --git a/dlls/mciavi32/info.c b/dlls/mciavi32/info.c
+index 286753f..cd02698 100644
+--- a/dlls/mciavi32/info.c
++++ b/dlls/mciavi32/info.c
+@@ -201,7 +201,7 @@ DWORD	MCIAVI_mciInfo(UINT wDevID, DWORD dwFlags, LPMCI_DGV_INFO_PARMSW lpParms)
+     EnterCriticalSection(&wma->cs);
+ 
+     if (dwFlags & MCI_INFO_PRODUCT)
+-	str = L"Wine's AVI player";
++	str = L"Video for Windows";
+     else if (dwFlags & MCI_INFO_VERSION)
+ 	str = L"1.1";
+     else if (dwFlags & MCI_INFO_FILE)
+diff --git a/dlls/mciavi32/wnd.c b/dlls/mciavi32/wnd.c
+index bf3b23e..3b18367 100644
+--- a/dlls/mciavi32/wnd.c
++++ b/dlls/mciavi32/wnd.c
+@@ -146,7 +146,7 @@ BOOL    MCIAVI_CreateWindow(WINE_MCIAVI* wma, DWORD dwFlags, LPMCI_DGV_OPEN_PARM
+         rc.left = rc.top = CW_USEDEFAULT;
+     }
+ 
+-    wma->hWnd = CreateWindowW(L"MCIAVI", L"Wine MCI-AVI player", dwStyle, rc.left, rc.top,
++    wma->hWnd = CreateWindowW(L"MCIAVI", L"Video", dwStyle, rc.left, rc.top,
+                               rc.right, rc.bottom, hParent, 0, MCIAVI_hInstance,
+                               ULongToPtr(wma->wDevID));
+     wma->hWndPaint = wma->hWnd;
+diff --git a/dlls/mcicda/mcicda.c b/dlls/mcicda/mcicda.c
+index 1a6ef4d..4bebbf8 100644
+--- a/dlls/mcicda/mcicda.c
++++ b/dlls/mcicda/mcicda.c
+@@ -664,7 +664,7 @@ static DWORD MCICDA_Info(UINT wDevID, DWORD dwFlags, LPMCI_INFO_PARMSW lpParms)
+     TRACE("buf=%p, len=%lu\n", lpParms->lpstrReturn, lpParms->dwRetSize);
+ 
+     if (dwFlags & MCI_INFO_PRODUCT) {
+-        str = L"Wine's audio CD";
++        str = L"CD Audio";
+     } else if (dwFlags & MCI_INFO_MEDIA_UPC) {
+ 	ret = MCIERR_NO_IDENTITY;
+     } else if (dwFlags & MCI_INFO_MEDIA_IDENTITY) {
+@@ -1313,7 +1313,7 @@ LRESULT CALLBACK MCICDA_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "MCI audio CD driver !", "Wine Driver", MB_OK); return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "Audio CD", "CD Audio", MB_OK); return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+     }
+diff --git a/dlls/mciwave/mciwave.c b/dlls/mciwave/mciwave.c
+index e5b94e3..a40792c 100644
+--- a/dlls/mciwave/mciwave.c
++++ b/dlls/mciwave/mciwave.c
+@@ -1677,10 +1677,10 @@ static DWORD WAVE_mciInfo(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_INFO_PARMSW l
+ 	ret = MCIERR_INVALID_DEVICE_ID;
+     } else {
+ 	switch (dwFlags & ~(MCI_WAIT|MCI_NOTIFY)) {
+-        case MCI_INFO_PRODUCT: str = L"Wine's audio player"; break;
++        case MCI_INFO_PRODUCT: str = L"Sound"; break;
+ 	case MCI_INFO_FILE:    str = wmw->lpFileName; break;
+-        case MCI_WAVE_INPUT:   str = L"Wine Wave In"; break;
+-        case MCI_WAVE_OUTPUT:  str = L"Wine Wave Out"; break;
++        case MCI_WAVE_INPUT:   str = L"Wave In"; break;
++        case MCI_WAVE_OUTPUT:  str = L"Wave Out"; break;
+ 	default:
+             WARN("Don't know this info command (%lu)\n", dwFlags);
+ 	    ret = MCIERR_UNRECOGNIZED_KEYWORD;
+@@ -1715,7 +1715,7 @@ LRESULT CALLBACK MCIWAVE_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "MCI waveaudio Driver !", "Wine Driver", MB_OK);	return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "Wave audio", "Sound", MB_OK);	return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+     }
+diff --git a/dlls/mmsystem.dll16/driver.c b/dlls/mmsystem.dll16/driver.c
+index b26dbb7..a74aac0 100644
+--- a/dlls/mmsystem.dll16/driver.c
++++ b/dlls/mmsystem.dll16/driver.c
+@@ -335,7 +335,7 @@ LRESULT WINAPI DrvDefDriverProc16(DWORD dwDevID, HDRVR16 hDriv, UINT16 wMsg,
+     case DRV_QUERYCONFIGURE:
+ 	return (LRESULT)0L;
+     case DRV_CONFIGURE:
+-	MessageBoxA(0, "Driver isn't configurable !", "Wine Driver", MB_OK);
++	MessageBoxA(0, "This driver has no settings.", "Driver", MB_OK);
+ 	return (LRESULT)0L;
+     case DRV_INSTALL:
+     case DRV_REMOVE:
+diff --git a/dlls/msadp32.acm/msadp32.c b/dlls/msadp32.acm/msadp32.c
+index b31f637..21f6329 100644
+--- a/dlls/msadp32.acm/msadp32.c
++++ b/dlls/msadp32.acm/msadp32.c
+@@ -394,9 +394,9 @@ static	LRESULT ADPCM_DriverDetails(PACMDRIVERDETAILSW add)
+     add->hicon = NULL;
+     MultiByteToWideChar( CP_ACP, 0, "MS-ADPCM", -1,
+                          add->szShortName, ARRAY_SIZE( add->szShortName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Wine MS ADPCM converter", -1,
++    MultiByteToWideChar( CP_ACP, 0, "Microsoft ADPCM Codec", -1,
+                          add->szLongName, ARRAY_SIZE( add->szLongName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Brought to you by the Wine team...", -1,
++    MultiByteToWideChar( CP_ACP, 0, "", -1,
+                          add->szCopyright, ARRAY_SIZE( add->szCopyright ));
+     MultiByteToWideChar( CP_ACP, 0, "Refer to LICENSE file", -1,
+                          add->szLicensing, ARRAY_SIZE( add->szLicensing ));
+@@ -801,7 +801,7 @@ LRESULT CALLBACK ADPCM_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "MSACM MS ADPCM filter !", "Wine Driver", MB_OK); return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "Microsoft ADPCM codec", "Microsoft ADPCM Codec", MB_OK); return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+ 
+diff --git a/dlls/msg711.acm/msg711.c b/dlls/msg711.acm/msg711.c
+index 69461e9..ba377d2 100644
+--- a/dlls/msg711.acm/msg711.c
++++ b/dlls/msg711.acm/msg711.c
+@@ -658,9 +658,9 @@ static	LRESULT G711_DriverDetails(PACMDRIVERDETAILSW add)
+     add->hicon = NULL;
+     MultiByteToWideChar( CP_ACP, 0, "Microsoft CCITT G.711", -1,
+                          add->szShortName, ARRAY_SIZE( add->szShortName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Wine G711 converter", -1,
++    MultiByteToWideChar( CP_ACP, 0, "CCITT G.711 A-Law and u-Law Codec", -1,
+                          add->szLongName, ARRAY_SIZE( add->szLongName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Brought to you by the Wine team...", -1,
++    MultiByteToWideChar( CP_ACP, 0, "", -1,
+                          add->szCopyright, ARRAY_SIZE( add->szCopyright ));
+     MultiByteToWideChar( CP_ACP, 0, "Refer to LICENSE file", -1,
+                          add->szLicensing, ARRAY_SIZE( add->szLicensing ));
+@@ -1086,7 +1086,7 @@ LRESULT CALLBACK G711_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "MS G711 (a-Law & mu-Law) filter !", "Wine Driver", MB_OK); return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "CCITT G.711 A-Law and u-Law codec", "G.711 Codec", MB_OK); return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+ 
+diff --git a/dlls/msgsm32.acm/msgsm32.c b/dlls/msgsm32.acm/msgsm32.c
+index 002604f..5de0d21 100644
+--- a/dlls/msgsm32.acm/msgsm32.c
++++ b/dlls/msgsm32.acm/msgsm32.c
+@@ -59,9 +59,9 @@ static	LRESULT GSM_DriverDetails(PACMDRIVERDETAILSW add)
+     add->hicon = NULL;
+     MultiByteToWideChar( CP_ACP, 0, "Microsoft GSM 6.10", -1,
+                          add->szShortName, ARRAY_SIZE( add->szShortName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Wine GSM 6.10 libgsm codec", -1,
++    MultiByteToWideChar( CP_ACP, 0, "GSM 6.10 Audio Codec", -1,
+                          add->szLongName, ARRAY_SIZE( add->szLongName ));
+-    MultiByteToWideChar( CP_ACP, 0, "Brought to you by the Wine team...", -1,
++    MultiByteToWideChar( CP_ACP, 0, "", -1,
+                          add->szCopyright, ARRAY_SIZE( add->szCopyright ));
+     MultiByteToWideChar( CP_ACP, 0, "Refer to LICENSE file", -1,
+                          add->szLicensing, ARRAY_SIZE( add->szLicensing ));
+@@ -515,7 +515,7 @@ LRESULT CALLBACK GSM_DriverProc(DWORD_PTR dwDevID, HDRVR hDriv, UINT wMsg,
+     case DRV_ENABLE:		return 1;
+     case DRV_DISABLE:		return 1;
+     case DRV_QUERYCONFIGURE:	return 1;
+-    case DRV_CONFIGURE:		MessageBoxA(0, "GSM 06.10 codec", "Wine Driver", MB_OK); return 1;
++    case DRV_CONFIGURE:		MessageBoxA(0, "GSM 6.10 audio codec", "GSM 6.10 Audio Codec", MB_OK); return 1;
+     case DRV_INSTALL:		return DRVCNF_RESTART;
+     case DRV_REMOVE:		return DRVCNF_RESTART;
+ 
+diff --git a/dlls/msvcrt/exit.c b/dlls/msvcrt/exit.c
+index 153e843..90ad99a 100644
+--- a/dlls/msvcrt/exit.c
++++ b/dlls/msvcrt/exit.c
+@@ -198,14 +198,14 @@ static void DoMessageBoxW(const wchar_t *lead, const wchar_t *message)
+   INT ret;
+ 
+   _snwprintf(text, ARRAY_SIZE(text), L"%ls\n\nProgram: %ls\n%ls\n\n"
+-          L"Press OK to exit the program, or Cancel to start the Wine debugger.\n",
++          L"Press OK to exit the program, or Cancel to start the debugger.\n",
+           lead, MSVCRT__wpgmptr, message);
+ 
+   msgbox.cbSize = sizeof(msgbox);
+   msgbox.hwndOwner = GetActiveWindow();
+   msgbox.hInstance = 0;
+   msgbox.lpszText = text;
+-  msgbox.lpszCaption = L"Wine C++ Runtime Library";
++  msgbox.lpszCaption = L"Microsoft Visual C++ Runtime Library";
+   msgbox.dwStyle = MB_OKCANCEL|MB_ICONERROR;
+   msgbox.lpszIcon = NULL;
+   msgbox.dwContextHelpId = 0;
+diff --git a/dlls/wbemprox/builtin.c b/dlls/wbemprox/builtin.c
+index 4bd183a..d76e297 100644
+--- a/dlls/wbemprox/builtin.c
++++ b/dlls/wbemprox/builtin.c
+@@ -1885,7 +1885,7 @@ static enum fill_status fill_cdromdrive( struct table *table, const struct expr
+             swprintf( drive, ARRAY_SIZE( drive ), L"%c:", 'A' + i );
+             rec->drive        = wcsdup( drive );
+             rec->mediatype    = L"CR-ROM";
+-            rec->name         = L"Wine CD_ROM ATA Device";
++            rec->name         = L"CD-ROM ATA Device";
+             rec->pnpdevice_id = L"IDE\\CDROMWINE_CD-ROM_____________________________1.0_____\\5&3A2A5854&0&1.0.0";
+             if (!match_row( table, row, cond, &status ))
+             {
+@@ -2691,14 +2691,14 @@ static enum fill_status fill_diskdrive( struct table *table, const struct expr *
+             if (!resize_table( table, row + 1, sizeof(*rec) )) return FILL_STATUS_FAILED;
+ 
+             rec = (struct record_diskdrive *)(table->data + offset);
+-            rec->caption       = L"Wine Disk Drive";
++            rec->caption       = L"Disk drive";
+             swprintf( device_id, ARRAY_SIZE( device_id ), fmtW, index );
+             rec->device_id     = wcsdup( device_id );
+             rec->index         = index++;
+             rec->interfacetype = L"IDE";
+             rec->manufacturer  = L"(Standard disk drives)";
+             rec->mediatype     = (type == DRIVE_FIXED) ? L"Fixed hard disk" : L"Removable media";
+-            rec->model         = L"Wine Disk Drive";
++            rec->model         = L"Disk drive";
+             rec->pnpdevice_id  = L"IDE\\Disk\\VEN_WINE";
+             rec->serialnumber  = get_diskdrive_serialnumber( root[0] );
+             rec->signature     = 0;
+@@ -4955,12 +4955,12 @@ static enum fill_status fill_sounddevice( struct table *table, const struct expr
+     if (!resize_table( table, 1, sizeof(*rec) )) return FILL_STATUS_FAILED;
+ 
+     rec = (struct record_sounddevice *)table->data;
+-    rec->caption = L"Wine Audio Device";
++    rec->caption = L"High Definition Audio Device";
+     rec->deviceid = L"HDAUDIO\\FUNC_01&VEN_0000&DEV_0000&SUBSYS_00000000&REV_0000\\0&DEADBEEF&0&DEAD";
+     rec->manufacturer = L"The Wine Project";
+-    rec->name = L"Wine Audio Device";
++    rec->name = L"High Definition Audio Device";
+     rec->pnpdeviceid = rec->deviceid;
+-    rec->productname = L"Wine Audio Device";
++    rec->productname = L"High Definition Audio Device";
+     rec->status = L"OK";
+     rec->statusinfo = 3;
+     if (!match_row( table, row, cond, &status )) free_row_values( table, row );
+@@ -5070,11 +5070,11 @@ static enum fill_status fill_msft_phys_disk( struct table *table, const struct e
+             swprintf( device_id, ARRAY_SIZE( device_id ), L"%d", index );
+             rec->device_id              = wcsdup( device_id );
+             rec->firmware_version       = L"1234";
+-            rec->friendly_name          = L"Wine disk";
++            rec->friendly_name          = L"Disk drive";
+             rec->health_status          = 0; /* Healthy */
+             rec->logical_sector_size    = 512;
+             rec->media_type             = 4; /* SSD */
+-            rec->model                  = wcsdup( L"Wine disk" );
++            rec->model                  = wcsdup( L"Disk drive" );
+             rec->operational_status     = dup_array( &operational_status_array );
+             rec->physical_location      = L"Integrated : Bus 0 : Device 0 : Function 0 : Adapter 0 : Port 0";
+             rec->physical_sector_size   = 4096;

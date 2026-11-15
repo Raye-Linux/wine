@@ -1,0 +1,195 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""What Raye knows about a Windows game or program, before the download.
+
+    raye-windows-titles                        every title, one per line
+    raye-windows-titles roblox                 one title
+    raye-windows-titles --file Setup.exe       which title a download is
+    raye-windows-titles --json roblox          the whole record
+    raye-windows-titles --state roblox         just the state word
+    raye-windows-titles --where               the files it read, in order
+
+The Store calls this before offering a download, and the games space
+calls it before starting one. A title it does not know is `untested`,
+never `works`: not knowing is not good news, and the caller has to be
+able to tell the two apart, so an unknown title exits 3 while a known
+one exits 0.
+
+Where the answers come from, and why in that order:
+
+    /usr/share/raye/windows-titles/*.titles    shipped
+    /var/lib/raye/windows-titles/*.titles      dropped in later
+
+read in that order, by file name inside each, and the last file that
+names a title wins. An anti-cheat changes side on a Tuesday; the answer
+has to change with it, and waiting for an image rebuild would mean
+telling people something false for a month. Dropping a file in
+/var/lib/raye/windows-titles is the whole update mechanism.
+
+RAYE_WINDOWS_TITLES_PATH overrides both, and
+RAYE_WINDOWS_PROFILES_PATH overrides where --file looks, for tests.
+"""
+import argparse
+import configparser
+import fnmatch
+import json
+import os
+import sys
+
+SHIPPED = "/usr/share/raye/windows-titles"
+LOCAL = "/var/lib/raye/windows-titles"
+PROFILES = "/usr/share/raye/windows-profiles"
+
+# Every state word, and whether it is a positive claim about this system.
+# A positive claim is one a user acts on, so it carries a machine and a
+# date; the rest do not need one.
+STATES = {"works": True, "offline-only": True, "blocked": False, "untested": False}
+FIELDS = ("name", "state", "upstream", "anticheat", "size_mb", "profile",
+          "why_en", "why_fr", "source", "tested_on", "tested_at")
+
+
+def directories():
+    override = os.environ.get("RAYE_WINDOWS_TITLES_PATH")
+    if override:
+        return [d for d in override.split(":") if d]
+    return [SHIPPED, LOCAL]
+
+
+def files(dirs=None):
+    """The *.titles files, in the order their answers override."""
+    out = []
+    for d in dirs if dirs is not None else directories():
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        out += [os.path.join(d, n) for n in names if n.endswith(".titles")]
+    return out
+
+
+def load(paths=None):
+    """{id: record}, later files winning, each record saying where it came from."""
+    titles = {}
+    for path in files() if paths is None else paths:
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            with open(path, encoding="utf-8") as f:
+                parser.read_file(f, path)
+        except (OSError, configparser.Error) as e:
+            print("raye-windows-titles: %s: %s" % (path, e), file=sys.stderr)
+            continue
+        for tid in parser.sections():
+            record = {k: "" for k in FIELDS}
+            for key, value in parser.items(tid):
+                record[key] = " ".join(value.split())
+            record["id"] = tid
+            record["from"] = path
+            titles[tid] = record
+    return titles
+
+
+def unknown(tid):
+    """A title nobody has written down. Said out loud, not guessed at."""
+    return {"id": tid, "from": "", "name": tid, "state": "untested",
+            "upstream": "unknown", "anticheat": "", "size_mb": "", "profile": "",
+            "why_en": "Raye does not know this one yet.",
+            "why_fr": "Raye ne connaît pas encore celui-ci.",
+            "source": "", "tested_on": "", "tested_at": ""}
+
+
+def profiles_directory():
+    return os.environ.get("RAYE_WINDOWS_PROFILES_PATH") or PROFILES
+
+
+def patterns(profiles_dir=None):
+    """[(title id, pattern)] from the profiles that name a title."""
+    profiles_dir = profiles_dir or profiles_directory()
+    out = []
+    try:
+        names = sorted(os.listdir(profiles_dir))
+    except OSError:
+        return out
+    for name in names:
+        if not name.endswith(".profile"):
+            continue
+        tid, match = "", ""
+        try:
+            with open(os.path.join(profiles_dir, name), encoding="utf-8") as f:
+                for line in f:
+                    line = line.rstrip("\n")
+                    for key in ("title", "match"):
+                        head = key + '="'
+                        if line.startswith(head) and line.endswith('"'):
+                            value = line[len(head):-1]
+                            if key == "title":
+                                tid = value
+                            else:
+                                match = value
+        except OSError:
+            continue
+        if tid:
+            out += [(tid, p) for p in match.split()]
+    return out
+
+
+def by_file(filename, profiles_dir=None):
+    """The title a download is, or None. Same lowercasing as the runner."""
+    lower = os.path.basename(filename).lower()
+    for tid, pattern in patterns(profiles_dir):
+        if fnmatch.fnmatchcase(lower, pattern):
+            return tid
+    return None
+
+
+def line(record, lang):
+    why = record["why_fr"] if lang.startswith("fr") and record["why_fr"] else record["why_en"]
+    return "%-28s %-13s %s" % (record["id"], record["state"], why)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], add_help=True)
+    ap.add_argument("title", nargs="?", help="the title id")
+    ap.add_argument("--file", help="a download's file name, resolved through the profiles")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--state", action="store_true", help="print the state word alone")
+    ap.add_argument("--where", action="store_true", help="the files read, in order")
+    ap.add_argument("--lang", default=os.environ.get("LANG", "en"))
+    a = ap.parse_args(argv)
+
+    if a.where:
+        for path in files():
+            print(path)
+        return 0
+
+    titles = load()
+    tid = a.title
+    if a.file:
+        found = by_file(a.file)
+        if found is None:
+            if a.json:
+                print(json.dumps({"file": a.file, "title": None}, ensure_ascii=False))
+            else:
+                print("raye-windows-titles: no title owns %s" % a.file, file=sys.stderr)
+            return 3
+        tid = found
+
+    if tid is None:
+        for key in sorted(titles):
+            print(line(titles[key], a.lang))
+        return 0
+
+    record = titles.get(tid)
+    missing = record is None
+    if missing:
+        record = unknown(tid)
+    if a.json:
+        print(json.dumps(record, ensure_ascii=False, sort_keys=True))
+    elif a.state:
+        print(record["state"])
+    else:
+        print(line(record, a.lang))
+    return 3 if missing else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

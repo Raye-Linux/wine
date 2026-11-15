@@ -1,0 +1,24 @@
+Subject: mmdevapi: refuse exclusive event mode the way Windows does
+
+Exclusive mode is not offered (the sound server mixes every stream). A
+program asking for it with an event callback got "device in use", which
+music programs show as an error. Answer "exclusive mode not allowed", as
+Windows does when the user switches exclusive mode off: programs then
+open the device in shared mode, where the period can go down to the
+sound server's 5.3 ms. Programs that need less use the ASIO driver.
+---
+diff --git a/dlls/mmdevapi/client.c b/dlls/mmdevapi/client.c
+index e22dae1..81261c9 100644
+--- a/dlls/mmdevapi/client.c
++++ b/dlls/mmdevapi/client.c
+@@ -147,7 +147,9 @@ static HRESULT adjust_timing(struct audio_client *client, const BOOLEAN force_de
+ 
+                 FIXME("EXCLUSIVE mode with EVENTCALLBACK\n");
+ 
+-                return AUDCLNT_E_DEVICE_IN_USE;
++                /* What Windows answers when exclusive mode is switched off;
++                 * programs take it as "use shared mode". */
++                return AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED;
+             } else if (*duration < 8 * *period)
+                 *duration = 8 * *period; /* May grow above 2s. */
+         }

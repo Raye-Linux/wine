@@ -1,0 +1,40 @@
+Subject: winealsa: MIDI port names without the project name
+
+The ALSA sequencer client and its ports were "WINE midi driver" and
+"WINE ALSA Input/Output", which every Linux MIDI tool and the PipeWire
+graph show.
+---
+diff --git a/dlls/winealsa.drv/alsamidi.c b/dlls/winealsa.drv/alsamidi.c
+index 5dff92f..def6c83 100644
+--- a/dlls/winealsa.drv/alsamidi.c
++++ b/dlls/winealsa.drv/alsamidi.c
+@@ -217,7 +217,7 @@ static snd_seq_t *seq_open(int *port_in_ret)
+             seq_unlock();
+             return NULL;
+         }
+-        snd_seq_set_client_name(midi_seq, "WINE midi driver");
++        snd_seq_set_client_name(midi_seq, "Windows MIDI");
+     }
+     seq_refs++;
+ 
+@@ -225,7 +225,7 @@ static snd_seq_t *seq_open(int *port_in_ret)
+     {
+         if (port_in < 0)
+         {
+-            port_in = snd_seq_create_simple_port(midi_seq, "WINE ALSA Input",
++            port_in = snd_seq_create_simple_port(midi_seq, "MIDI In",
+                                                  SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_READ | SND_SEQ_PORT_CAP_SUBS_WRITE,
+                                                  SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+             if (port_in < 0)
+@@ -554,9 +554,9 @@ static UINT midi_out_open(WORD dev_id, MIDIOPENDESC *midi_desc, UINT flags, stru
+     /* Create a port dedicated to a specific device */
+     /* Keep the old name without a number for the first port */
+     if (dev_id)
+-        sprintf(port_out_name, "WINE ALSA Output #%d", dev_id);
++        sprintf(port_out_name, "MIDI Out %d", dev_id);
+ 
+-    port_out = snd_seq_create_simple_port(midi_seq, dev_id ? port_out_name : "WINE ALSA Output",
++    port_out = snd_seq_create_simple_port(midi_seq, dev_id ? port_out_name : "MIDI Out",
+                                           SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ | SND_SEQ_PORT_CAP_SUBS_WRITE,
+                                           SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+ 

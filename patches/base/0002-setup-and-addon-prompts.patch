@@ -1,0 +1,62 @@
+Subject: wineboot, appwiz: plain names in the setup window and add-on prompts
+
+The window shown while a prefix is set up and the .NET and web content
+prompts talk about Windows programs, not about the project the layer
+comes from, and no longer send people to its wiki.
+---
+diff --git a/dlls/appwiz.cpl/appwiz.rc b/dlls/appwiz.cpl/appwiz.rc
+index c68ae5a..3da9725 100644
+--- a/dlls/appwiz.cpl/appwiz.rc
++++ b/dlls/appwiz.cpl/appwiz.rc
+@@ -98,13 +98,11 @@ FONT 8, "MS Shell Dlg"
+ 
+ ID_DWL_GECKO_DIALOG DIALOG  0, 0, 260, 95
+ STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+-CAPTION "Wine Gecko Installer"
++CAPTION "Web content support"
+ FONT 8, "MS Shell Dlg"
+ {
+-    CONTROL "Wine could not find a Gecko package which is needed for applications embedding HTML " \
+-          "to work correctly. Wine can automatically download and install it for you.\n\n" \
+-          "Note: it is recommended to use your distribution's packages instead. " \
+-          "See <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/Gecko\">https://gitlab.winehq.org/wine/wine/-/wikis/Gecko</a> for details.",
++    CONTROL "Some programs show web pages inside their windows and need an extra component " \
++          "for it. It can be downloaded and installed now.",
+           ID_DWL_STATUS, "SysLink", 0, 10, 10, 240, 65
+     CONTROL "", ID_DWL_PROGRESS, PROGRESS_CLASSA, WS_BORDER|PBS_SMOOTH, 10, 40, 240, 12
+     DEFPUSHBUTTON "&Install", ID_DWL_INSTALL, 200, 76, 50, 14, WS_GROUP | WS_TABSTOP
+@@ -113,13 +111,11 @@ FONT 8, "MS Shell Dlg"
+ 
+ ID_DWL_MONO_DIALOG DIALOG  0, 0, 260, 95
+ STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+-CAPTION "Wine Mono Installer"
++CAPTION ".NET support"
+ FONT 8, "MS Shell Dlg"
+ {
+-    CONTROL "Wine could not find a wine-mono package which is needed for .NET applications " \
+-          "to work correctly. Wine can automatically download and install it for you.\n\n" \
+-          "Note: it is recommended to use your distribution's packages instead. " \
+-          "See <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/Wine-Mono\">https://gitlab.winehq.org/wine/wine/-/wikis/Wine-Mono</a> for details.",
++    CONTROL "This program needs .NET support, which is missing. " \
++          "It can be downloaded and installed now.",
+           ID_DWL_STATUS, "SysLink", 0, 10, 10, 240, 65
+     CONTROL "", ID_DWL_PROGRESS, PROGRESS_CLASSA, WS_BORDER|PBS_SMOOTH, 10, 40, 240, 12
+     DEFPUSHBUTTON "&Install", ID_DWL_INSTALL, 200, 76, 50, 14, WS_GROUP | WS_TABSTOP
+diff --git a/programs/wineboot/wineboot.rc b/programs/wineboot/wineboot.rc
+index 1b70c1f..13f2fea 100644
+--- a/programs/wineboot/wineboot.rc
++++ b/programs/wineboot/wineboot.rc
+@@ -38,11 +38,11 @@ END
+ 
+ IDD_WAITDLG DIALOG 0, 0, 200, 50
+ STYLE DS_MODALFRAME | DS_NOIDLEMSG | DS_CENTER | WS_POPUP | WS_DISABLED
+-CAPTION "Wine"
++CAPTION "Windows programs"
+ FONT 8, "MS Shell Dlg"
+ BEGIN
+     ICON "", IDC_WAITICON, 3, 3, 32, 32
+-    LTEXT "The Wine configuration in %s is being updated, please wait...",
++    LTEXT "Setting up Windows programs. This can take a minute.",
+           IDC_WAITTEXT, 40, 5, 150, 40, SS_NOPREFIX | SS_EDITCONTROL
+ END
+ 

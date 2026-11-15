@@ -1,0 +1,763 @@
+Subject: po: French for the new names
+
+French translations of every string the patches above change, made with
+tools/po-rename.py and tools/names-fr.tsv. Other languages fall back to
+the new English text.
+---
+diff --git a/po/fr.po b/po/fr.po
+index 5926147..4c46fed 100644
+--- a/po/fr.po
++++ b/po/fr.po
+@@ -166,27 +166,17 @@ msgid "Comments:"
+ msgstr "Commentaires :"
+ 
+ #: dlls/appwiz.cpl/appwiz.rc:102
+-msgid "Wine Gecko Installer"
+-msgstr "Programme d'installation de Gecko pour Wine"
++msgid "Web content support"
++msgstr "Prise en charge du contenu web"
+ 
+ #: dlls/appwiz.cpl/appwiz.rc:105
+ msgid ""
+-"Wine could not find a Gecko package which is needed for applications "
+-"embedding HTML to work correctly. Wine can automatically download and "
+-"install it for you.\n"
+-"\n"
+-"Note: it is recommended to use your distribution's packages instead. See <a "
+-"href=\"https://gitlab.winehq.org/wine/wine/-/wikis/Gecko\">https://"
+-"gitlab.winehq.org/wine/wine/-/wikis/Gecko</a> for details."
++"Some programs show web pages inside their windows and need an extra "
++"component for it. It can be downloaded and installed now."
+ msgstr ""
+-"Wine n'a pu trouver de paquet Gecko, qui est nécessaire pour que les "
+-"applications incorporant du HTML puissent fonctionner correctement. Wine "
+-"peut automatiquement le télécharger et l'installer pour vous.\n"
+-"\n"
+-"Note : il est recommandé d'utiliser le paquet de votre distribution. "
+-"Consultez <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
+-"Gecko\">https://gitlab.winehq.org/wine/wine/-/wikis/Gecko</a> pour plus de "
+-"détails."
++"Certains programmes affichent des pages web dans leurs fenêtres et ont "
++"besoin d'un composant supplémentaire. Il peut être téléchargé et installé "
++"maintenant."
+ 
+ #: dlls/appwiz.cpl/appwiz.rc:111 dlls/appwiz.cpl/appwiz.rc:126
+ msgid "&Install"
+@@ -236,27 +226,16 @@ msgid "Cancel"
+ msgstr "Annuler"
+ 
+ #: dlls/appwiz.cpl/appwiz.rc:117
+-msgid "Wine Mono Installer"
+-msgstr "Programme d'installation de Mono pour Wine"
++msgid ".NET support"
++msgstr "Prise en charge de .NET"
+ 
+ #: dlls/appwiz.cpl/appwiz.rc:120
+ msgid ""
+-"Wine could not find a wine-mono package which is needed for .NET "
+-"applications to work correctly. Wine can automatically download and install "
+-"it for you.\n"
+-"\n"
+-"Note: it is recommended to use your distribution's packages instead. See <a "
+-"href=\"https://gitlab.winehq.org/wine/wine/-/wikis/Wine-Mono\">https://"
+-"gitlab.winehq.org/wine/wine/-/wikis/Wine-Mono</a> for details."
++"This program needs .NET support, which is missing. It can be downloaded and "
++"installed now."
+ msgstr ""
+-"Wine n'a pu trouver de paquet wine-mono, qui est nécessaire pour que les "
+-"applications .NET fonctionnent correctement. Wine peut automatiquement le "
+-"télécharger et l'installer pour vous.\n"
+-"\n"
+-"Note : il est recommandé d'utiliser le paquet de votre distribution. "
+-"Consultez <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/Wine-"
+-"Mono\">https://gitlab.winehq.org/wine/wine/-/wikis/Wine-Mono</a> pour plus "
+-"de détails."
++"Ce programme a besoin de la prise en charge de .NET, qui est absente. Elle "
++"peut être téléchargée et installée maintenant."
+ 
+ #: dlls/appwiz.cpl/appwiz.rc:31
+ msgid "Add/Remove Programs"
+@@ -393,8 +372,8 @@ msgid "audio"
+ msgstr "audio"
+ 
+ #: dlls/avifil32/avifil32.rc:36
+-msgid "Wine AVI-default-filehandler"
+-msgstr "Gestionnaire de fichiers AVI par défaut de Wine"
++msgid "AVI default file handler"
++msgstr "Gestionnaire de fichiers AVI par défaut"
+ 
+ #: dlls/avifil32/avifil32.rc:37
+ msgid "uncompressed"
+@@ -451,6 +430,7 @@ msgstr "&Appliquer"
+ #: dlls/comctl32/comctl32.rc:74 dlls/comctl32/comctl32.rc:88
+ #: dlls/comdlg32/comdlg32.rc:309 dlls/user32/user32.rc:99
+ #: dlls/user32/user32.rc:81
++#: programs/winhlp32/winhlp32.rc:81
+ msgid "Help"
+ msgstr "Aide"
+ 
+@@ -2491,10 +2471,10 @@ msgstr "Magasin de certificats sérialisés Microsoft (*.sst)"
+ 
+ #: dlls/cryptui/cryptui.rc:316
+ msgid ""
+-"Wine can automatically select the certificate store, or you can specify a "
++"Raye can automatically select the certificate store, or you can specify a "
+ "location for the certificates."
+ msgstr ""
+-"Wine peut sélectionner automatiquement un magasin de certificats, ou vous "
++"Raye peut sélectionner automatiquement un magasin de certificats, ou vous "
+ "pouvez spécifier l'emplacement des certificats."
+ 
+ #: dlls/cryptui/cryptui.rc:318
+@@ -3811,9 +3791,8 @@ msgid "Internet Settings"
+ msgstr "Paramètres Internet"
+ 
+ #: dlls/inetcpl.cpl/inetcpl.rc:32
+-msgid "Configure Wine Internet Browser and related settings"
+-msgstr ""
+-"Configurer le navigateur internet de Wine et d'autres paramètres associés"
++msgid "Configure the Internet browser and related settings"
++msgstr "Configurer le navigateur internet et d'autres paramètres associés"
+ 
+ #: dlls/inetcpl.cpl/inetcpl.rc:33
+ msgid "Security settings for zone: "
+@@ -9048,15 +9027,15 @@ msgstr ""
+ "le fichier existe et que vous avez les droits pour y accéder."
+ 
+ #: dlls/msrle32/msrle32.rc:31
+-msgid "Wine MS-RLE video codec"
+-msgstr "Codec vidéo MS-RLE de Wine"
++msgid "MS-RLE video codec"
++msgstr "Codec vidéo MS-RLE"
+ 
+ #: dlls/msrle32/msrle32.rc:32
+ msgid ""
+-"Wine MS-RLE video codec\n"
++"MS-RLE video codec\n"
+ "Copyright 2002 by Michael Guennewig"
+ msgstr ""
+-"Codec vidéo MS-RLE de Wine\n"
++"Codec vidéo MS-RLE\n"
+ "Copyright 2002 par Michael Günnewig"
+ 
+ #: dlls/msvfw32/msvfw32.rc:33
+@@ -9096,8 +9075,8 @@ msgid "Full Frames (Uncompressed)"
+ msgstr "Images complètes (non compressées)"
+ 
+ #: dlls/msvidc32/msvidc32.rc:29
+-msgid "Wine Video 1 video codec"
+-msgstr "Codec vidéo Wine Video 1"
++msgid "Video 1 video codec"
++msgstr "Codec vidéo Video 1"
+ 
+ #: dlls/msxml3/msxml.mc:31
+ #, fuzzy
+@@ -10520,8 +10499,8 @@ msgid "Scroll Right"
+ msgstr "Défilement vers la droite"
+ 
+ #: dlls/shdoclc/shdoclc.rc:28
+-msgid "Wine Internet Explorer"
+-msgstr "Internet Explorer de Wine"
++msgid "Internet Explorer"
++msgstr "Internet Explorer"
+ 
+ #: dlls/shdoclc/shdoclc.rc:33
+ msgid "&w&bPage &p"
+@@ -10656,16 +10635,16 @@ msgid "About %s"
+ msgstr "À propos de %s"
+ 
+ #: dlls/shell32/shell32.rc:325
+-msgid "Wine &license"
+-msgstr "&Licence de Wine"
++msgid "&License"
++msgstr "&Licence"
+ 
+ #: dlls/shell32/shell32.rc:330
+ msgid "Running on %s"
+ msgstr "Exécuté avec %s"
+ 
+ #: dlls/shell32/shell32.rc:331
+-msgid "Wine was brought to you by:"
+-msgstr "Wine est une réalisation de :"
++msgid "Windows programs in Raye exist thanks to:"
++msgstr "Les programmes Windows de Raye existent grâce à :"
+ 
+ #: dlls/shell32/shell32.rc:336
+ msgid "Run"
+@@ -10673,11 +10652,11 @@ msgstr "E&xécuter"
+ 
+ #: dlls/shell32/shell32.rc:340
+ msgid ""
+-"Type the name of a program, folder, document, or Internet resource, and Wine "
++"Type the name of a program, folder, document, or Internet resource, and Raye "
+ "will open it for you."
+ msgstr ""
+ "Entrez le nom d'un programme, d'un dossier, d'un document ou d'une ressource "
+-"Internet, et Wine l'ouvrira pour vous."
++"Internet, et Raye l'ouvrira pour vous."
+ 
+ #: dlls/shell32/shell32.rc:341
+ msgid "&Open:"
+@@ -10783,6 +10762,7 @@ msgid "My Computer"
+ msgstr "Poste de travail"
+ 
+ #: dlls/shell32/shell32.rc:154
++#: dlls/shell32/shell32.rc:242
+ msgid "Control Panel"
+ msgstr "Panneau de configuration"
+ 
+@@ -10811,8 +10791,8 @@ msgid "Shutdown"
+ msgstr "Arrêter"
+ 
+ #: dlls/shell32/shell32.rc:192
+-msgid "Do you want to shutdown your Wine session?"
+-msgstr "Voulez-vous clôturer la session Wine ?"
++msgid "Close all Windows programs?"
++msgstr "Fermer tous les programmes Windows ?"
+ 
+ #: dlls/shell32/shell32.rc:203 programs/progman/progman.rc:83
+ msgid "Programs"
+@@ -11018,10 +10998,6 @@ msgstr ""
+ "sélectionné, ils seront écrasés. Voulez-vous quand même déplacer ou copier\n"
+ "le dossier ?"
+ 
+-#: dlls/shell32/shell32.rc:242
+-msgid "Wine Control Panel"
+-msgstr "Panneau de configuration de Wine"
+-
+ #: dlls/shell32/shell32.rc:195
+ msgid "Unable to display Run dialog box (internal error)"
+ msgstr ""
+@@ -11079,37 +11055,38 @@ msgstr "Confirmez l'écrasement"
+ 
+ #: dlls/shell32/shell32.rc:270
+ msgid ""
+-"Wine is free software; you can redistribute it and/or modify it under the "
+-"terms of the GNU Lesser General Public License as published by the Free "
+-"Software Foundation; either version 2.1 of the License, or (at your option) "
+-"any later version.\n"
++"This library is free software; you can redistribute it and/or modify it "
++"under the terms of the GNU Lesser General Public License as published by the "
++"Free Software Foundation; either version 2.1 of the License, or (at your "
++"option) any later version.\n"
+ "\n"
+-"Wine is distributed in the hope that it will be useful, but WITHOUT ANY "
+-"WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS "
+-"FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for more "
+-"details.\n"
++"This library is distributed in the hope that it will be useful, but WITHOUT "
++"ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or "
++"FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License "
++"for more details.\n"
+ "\n"
+ "You should have received a copy of the GNU Lesser General Public License "
+-"along with Wine; if not, write to the Free Software Foundation, Inc., 51 "
+-"Franklin St, Fifth Floor, Boston, MA 02110-1301, USA."
++"along with this library; if not, write to the Free Software Foundation, "
++"Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA."
+ msgstr ""
+-"Wine est un logiciel libre ; vous pouvez le redistribuer et/ou le modifier "
+-"suivant les termes de la Licence Générale Publique Limitée GNU telle que "
+-"publiée par la Free Software Foundation ; soit la version 2.1 de la Licence, "
+-"soit (à votre gré) toute version ultérieure.\n"
++"Cette bibliothèque est un logiciel libre ; vous pouvez la redistribuer et/ou "
++"la modifier suivant les termes de la Licence Générale Publique Limitée GNU "
++"telle que publiée par la Free Software Foundation ; soit la version 2.1 de "
++"la Licence, soit (à votre gré) toute version ultérieure.\n"
+ "\n"
+-"Wine est distribué dans l’espoir qu'il sera utile, mais SANS AUCUNE "
+-"GARANTIE : sans même la garantie implicite de COMMERCIALISABILITÉ ou "
+-"d’ADÉQUATION À UN OBJECTIF PARTICULIER. Consultez la Licence Générale "
+-"Publique Limitée pour plus de détails.\n"
++"Cette bibliothèque est distribuée dans l’espoir qu'elle sera utile, mais "
++"SANS AUCUNE GARANTIE : sans même la garantie implicite de "
++"COMMERCIALISABILITÉ ou d’ADÉQUATION À UN OBJECTIF PARTICULIER. Consultez la "
++"Licence Générale Publique Limitée pour plus de détails.\n"
+ "\n"
+ "Vous devriez avoir reçu une copie de la Licence Générale Publique Limitée "
+-"GNU avec Wine ; si ce n’est pas le cas, écrivez à la Free Software "
+-"Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA."
++"GNU avec cette bibliothèque ; si ce n’est pas le cas, écrivez à la Free "
++"Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA "
++"02110-1301, USA."
+ 
+ #: dlls/shell32/shell32.rc:258
+-msgid "Wine License"
+-msgstr "Licence de Wine"
++msgid "License"
++msgstr "Licence"
+ 
+ #: dlls/shell32/shell32.rc:153
+ msgid "Trash"
+@@ -13598,8 +13575,8 @@ msgid "&Close\tAlt+F4"
+ msgstr "&Fermer\tAlt+F4"
+ 
+ #: dlls/user32/user32.rc:38
+-msgid "&About Wine"
+-msgstr "À &propos de Wine"
++msgid "&About Windows programs"
++msgstr "À &propos des programmes Windows"
+ 
+ #: dlls/user32/user32.rc:49
+ msgid "&Close\tCtrl+F4"
+@@ -13984,8 +13961,9 @@ msgstr "Erreur d'exécution Microsoft VBScript"
+ 
+ #: dlls/winemac.drv/winemac.rc:32 programs/wineboot/wineboot.rc:42
+ #: programs/winecfg/winecfg.rc:144
+-msgid "Wine"
+-msgstr "Wine"
++#: programs/explorer/explorer.rc:38
++msgid "Windows programs"
++msgstr "Programmes Windows"
+ 
+ #: dlls/winemac.drv/winemac.rc:33
+ msgid "Hide %@"
+@@ -14778,8 +14756,8 @@ msgstr ""
+ "connecté au réseau."
+ 
+ #: dlls/winmm/winmm.rc:136
+-msgid "Wine Sound Mapper"
+-msgstr "Mappeur de sons de Wine"
++msgid "Sound Mapper"
++msgstr "Mappeur de sons"
+ 
+ #: dlls/winmm/winmm.rc:137
+ msgid "Volume"
+@@ -15481,7 +15459,7 @@ msgid ""
+ "where <variable> and <value> are character strings. There must be no space\n"
+ "before the equals sign, nor can the variable name have embedded spaces.\n"
+ "\n"
+-"Under Wine, the environment of the underlying operating system is included\n"
++"Under Raye, the environment of the underlying operating system is included\n"
+ "into the Win32 environment, there will generally therefore be many more\n"
+ "values than in a native Win32 implementation. Note that it is not possible\n"
+ "to affect the operating system environment from within cmd.\n"
+@@ -15497,7 +15475,7 @@ msgstr ""
+ "où <variable> et <valeur> sont des chaînes de caractères. Il ne peut y\n"
+ "avoir aucun espace avant le signe « = », ni dans <variable>.\n"
+ "\n"
+-"Sous Wine, l'environnement du système hôte est inclus dans l'environnement\n"
++"Sous Raye, l'environnement du système hôte est inclus dans l'environnement\n"
+ "Win32, il y aura par conséquent généralement bien plus de valeurs que dans\n"
+ "un système Win32 natif. Notez qu'il n'est pas possible de modifier\n"
+ "l'environnement du système d'exploitation dans cmd.\n"
+@@ -15598,7 +15576,7 @@ msgid ""
+ "VERIFY OFF\tClear the flag.\n"
+ "VERIFY\t\tDisplays ON or OFF as appropriate.\n"
+ "\n"
+-"The verify flag has no function in Wine.\n"
++"The verify flag has no function in Raye.\n"
+ msgstr ""
+ "VERIFY est utilisé pour positionner, effacer ou tester l'indicateur de\n"
+ "vérification. Les formes suivantes sont correctes :\n"
+@@ -15607,7 +15585,7 @@ msgstr ""
+ "VERIFY OFF\tEfface l'indicateur.\n"
+ "VERIFY\t\tAffiche l'état ON ou OFF de l'indicateur.\n"
+ "\n"
+-"L'indicateur de vérification n'a pas de fonction dans Wine.\n"
++"L'indicateur de vérification n'a pas de fonction dans Raye.\n"
+ 
+ #: programs/cmd/cmd.rc:253
+ msgid "VER displays the version of cmd you are running.\n"
+@@ -15960,8 +15938,8 @@ msgid "Press any key to continue... "
+ msgstr "Appuyez sur une touche pour continuer... "
+ 
+ #: programs/cmd/cmd.rc:392
+-msgid "Wine Command Prompt"
+-msgstr "Invite de commande Wine"
++msgid "Command Prompt"
++msgstr "Invite de commandes"
+ 
+ #: programs/cmd/cmd.rc:393
+ msgid "Microsoft Windows %1!S!\n"
+@@ -16256,8 +16234,8 @@ msgid "Usage: dxdiag [/whql:off | /whql:on] [/t filename | /x filename]"
+ msgstr "Usage : dxdiag [/whql:off | /whql:on] [/t fichier | /x fichier]"
+ 
+ #: programs/explorer/explorer.rc:32
+-msgid "Wine Explorer"
+-msgstr "Explorateur de Wine"
++msgid "File Explorer"
++msgstr "Explorateur de fichiers"
+ 
+ #: programs/explorer/explorer.rc:34
+ msgid "Start"
+@@ -16280,13 +16258,6 @@ msgid ""
+ "Are you sure you want to close all programs and exit the virtual desktop?"
+ msgstr "Voulez-vous réellement supprimer ces valeurs ?"
+ 
+-#: programs/explorer/explorer.rc:38
+-#, fuzzy
+-#| msgctxt "display name"
+-#| msgid "Desktop"
+-msgid "Wine Desktop"
+-msgstr "Bureau"
+-
+ #: programs/findstr/findstr.rc:28
+ #, fuzzy
+ #| msgid "Use c&onnection string"
+@@ -17136,10 +17107,10 @@ msgstr "Activer les connexions à &distance (Win95 uniquement)"
+ #: programs/oleview/oleview.rc:173
+ msgid ""
+ "These settings change only registry values.\n"
+-"They have no effect on Wine performance."
++"They have no effect on performance."
+ msgstr ""
+ "Ces paramètres ne font que modifier des valeurs du registre.\n"
+-"Ils n'ont pas d'effet sur les performances de Wine."
++"Ils n'ont pas d'effet sur les performances."
+ 
+ #: programs/oleview/oleview.rc:180
+ msgid "Default Interface Viewer"
+@@ -17202,8 +17173,8 @@ msgid "Change machine wide Distributed COM settings"
+ msgstr "Modifier les paramètres COM distribués de niveau système"
+ 
+ #: programs/oleview/oleview.rc:108
+-msgid "Run the Wine registry editor"
+-msgstr "Exécuter l'éditeur de base de registre de Wine"
++msgid "Run the registry editor"
++msgstr "Exécuter l'éditeur de base de registre"
+ 
+ #: programs/oleview/oleview.rc:109
+ msgid "Quit the application. Prompts to save changes"
+@@ -18818,12 +18789,12 @@ msgstr "Modification de la valeur QWORD"
+ 
+ #: programs/regsvr32/regsvr32.rc:33
+ msgid ""
+-"Wine DLL Registration Utility\n"
++"DLL Registration Utility\n"
+ "\n"
+ "Provides DLL registration services.\n"
+ "\n"
+ msgstr ""
+-"Utilitaire d'enregistrement de DLL de Wine\n"
++"Utilitaire d'enregistrement de DLL\n"
+ "\n"
+ "Fournit des services d'enregistrement de DLL.\n"
+ "\n"
+@@ -18905,7 +18876,6 @@ msgid "regsvr32: Successfully uninstalled DLL '%1'\n"
+ msgstr "regsvr32 : DLL « %1 » désinstallée avec succès\n"
+ 
+ #: programs/start/start.rc:56
+-#, fuzzy
+ #| msgid ""
+ #| "Start a program, or open a document in the program normally used for "
+ #| "files\n"
+@@ -18960,11 +18930,11 @@ msgid ""
+ "/node n        Start the program on the specified NUMA node.\n"
+ "/affinity mask Start the program with the specified affinity mask.\n"
+ "/machine arch  Force using a specific architecture (x86,arm,amd64,arm64).\n"
+-"/wait          Wait for the program to finish, then exit with its exit "
+-"code.\n"
+-"/unix          Use a Unix filename and start the file like Windows "
+-"Explorer.\n"
+-"/exec          Exec the specified file (for internal Wine usage).\n"
++"/wait          Wait for the program to finish, then exit with its exit code."
++"\n"
++"/unix          Use a Unix filename and start the file like Windows Explorer."
++"\n"
++"/exec          Exec the specified file (for internal use).\n"
+ "/ProgIDOpen    Open a document using the specified progID.\n"
+ "/?             Display this help and exit.\n"
+ msgstr ""
+@@ -18996,7 +18966,7 @@ msgstr ""
+ "                 son code de sortie.\n"
+ "/unix            Interpréter fichier_programme ou fichier_document comme un\n"
+ "                 chemin Unix.\n"
+-"/exec            Ouvrir le fichier spécifié (usage interne à Wine).\\n\"\n"
++"/exec            Ouvrir le fichier spécifié (usage interne).\n"
+ "/ProgIDOpen      Ouvrir un document via le programme identifié par progID.\n"
+ "/?               Afficher cette aide et se terminer.\n"
+ 
+@@ -19968,8 +19938,8 @@ msgid ""
+ msgstr ""
+ 
+ #: programs/uninstaller/uninstaller.rc:29
+-msgid "Wine Application Uninstaller"
+-msgstr "Programme de désinstallation des applications Wine"
++msgid "Add or remove programs"
++msgstr "Ajouter ou supprimer des programmes"
+ 
+ #: programs/uninstaller/uninstaller.rc:30
+ msgid ""
+@@ -19998,14 +19968,14 @@ msgstr "uninstaller : option [%1] invalide\n"
+ 
+ #: programs/uninstaller/uninstaller.rc:35
+ msgid ""
+-"Wine Application Uninstaller\n"
++"Add or remove programs\n"
+ "\n"
+-"Uninstall applications from the current Wine prefix.\n"
++"Uninstall programs from this Windows space.\n"
+ "\n"
+ msgstr ""
+-"Programme de désinstallation des applications Wine\n"
++"Ajouter ou supprimer des programmes\n"
+ "\n"
+-"Désinstalle des applications du préfixe Wine courant.\n"
++"Désinstalle des programmes de cet espace Windows.\n"
+ "\n"
+ 
+ #: programs/uninstaller/uninstaller.rc:43
+@@ -20015,7 +19985,7 @@ msgid ""
+ "\n"
+ "Options:\n"
+ "  --help\t    Display this information.\n"
+-"  --list\t    List all applications installed in this Wine prefix.\n"
++"  --list\t    List all applications installed in this Windows space.\n"
+ "  --remove {GUID}   Uninstall the specified application.\n"
+ "\t\t    Use '--list' to determine the application GUID.\n"
+ "  [no option]       Launch the graphical version of this program.\n"
+@@ -20026,8 +19996,8 @@ msgstr ""
+ "\n"
+ "Options :\n"
+ "  --help\t    Afficher ces informations.\n"
+-"  --list\t    Lister toutes les applications installées dans ce préfixe "
+-"Wine.\n"
++"  --list\t    Lister toutes les applications installées dans cet espace "
++"Windows.\n"
+ "  --remove {GUID}   Désinstaller l'application spécifiée.\n"
+ "\t\t    Utilisez « --list » pour déterminer le GUID de l'application.\n"
+ "  [aucune option]   Lancer la version graphique de ce programme.\n"
+@@ -20078,10 +20048,8 @@ msgstr ""
+ "Si vous l'arrêtez, vous pouvez perdre toutes les données non enregistrées."
+ 
+ #: programs/wineboot/wineboot.rc:46
+-msgid "The Wine configuration in %s is being updated, please wait..."
+-msgstr ""
+-"La configuration de Wine est en cours de mise à jour dans %s ; veuillez "
+-"patienter..."
++msgid "Setting up Windows programs. This can take a minute."
++msgstr "Préparation des programmes Windows. Cela peut prendre une minute."
+ 
+ #: programs/winecfg/winecfg.rc:147
+ msgid ""
+@@ -20113,14 +20081,13 @@ msgstr "Paramètres des applications"
+ 
+ #: programs/winecfg/winecfg.rc:161
+ msgid ""
+-"Wine can mimic different Windows versions for each application. This tab is "
+-"linked to the Libraries and Graphics tabs to allow you to change system-wide "
+-"or per-application settings in those tabs as well."
++"Each program can be shown a different Windows version. This tab is linked to "
++"the Libraries and Graphics tabs to allow you to change system-wide or "
++"per-application settings in those tabs as well."
+ msgstr ""
+-"Wine peut imiter différentes versions de Windows pour chaque application. "
+-"Cet onglet est lié aux onglets Bibliothèques et Affichage pour vous "
+-"permettre de changer des paramètres globaux ou par application dans ces "
+-"onglets."
++"Chaque programme peut voir une version de Windows différente. Cet onglet est "
++"lié aux onglets Bibliothèques et Affichage pour vous permettre de changer "
++"des paramètres globaux ou par application dans ces onglets."
+ 
+ #: programs/winecfg/winecfg.rc:165
+ msgid "Add appli&cation..."
+@@ -20173,12 +20140,12 @@ msgstr "Remplacement de DLL"
+ #: programs/winecfg/winecfg.rc:198
+ msgid ""
+ "Dynamic Link Libraries can be specified individually to be either builtin "
+-"(provided by Wine) or native (taken from Windows or provided by the "
++"(provided by Raye) or native (taken from Windows or provided by the "
+ "application)."
+ msgstr ""
+-"Il est possible de spécifier si Wine doit utiliser une version native "
++"Il est possible de spécifier si Raye doit utiliser une version native "
+ "(importée depuis Windows ou installée par l'application) ou bien une version "
+-"intégrée (distribuée avec Wine) de chaque bibliothèque partagée (DLL) "
++"intégrée (distribuée avec Raye) de chaque bibliothèque partagée (DLL) "
+ "utilisée par un programme."
+ 
+ #: programs/winecfg/winecfg.rc:200
+@@ -20206,8 +20173,8 @@ msgid "Load order"
+ msgstr "Ordre de chargement"
+ 
+ #: programs/winecfg/winecfg.rc:215
+-msgid "&Builtin (Wine)"
+-msgstr "&intégrée (Wine)"
++msgid "&Builtin (Raye)"
++msgstr "&intégrée (Raye)"
+ 
+ #: programs/winecfg/winecfg.rc:216
+ msgid "&Native (Windows)"
+@@ -20392,8 +20359,8 @@ msgid "About"
+ msgstr "À propos"
+ 
+ #: programs/winecfg/winecfg.rc:43
+-msgid "Wine configuration"
+-msgstr "Configuration de Wine"
++msgid "Windows programs settings"
++msgstr "Paramètres des programmes Windows"
+ 
+ #: programs/winecfg/winecfg.rc:45
+ msgid "Theme files (*.msstyles; *.theme)"
+@@ -20412,8 +20379,8 @@ msgid "Links to"
+ msgstr "Pointe vers"
+ 
+ #: programs/winecfg/winecfg.rc:44
+-msgid "Wine configuration for %s"
+-msgstr "Configuration de Wine pour %s"
++msgid "Windows programs settings for %s"
++msgstr "Paramètres des programmes Windows pour %s"
+ 
+ #: programs/winecfg/winecfg.rc:83
+ msgid "Selected driver: %s"
+@@ -20500,8 +20467,8 @@ msgid "Default Settings"
+ msgstr "Paramètres par défaut"
+ 
+ #: programs/winecfg/winecfg.rc:61
+-msgid "Wine Programs (*.exe; *.exe.so)"
+-msgstr "Programmes de Wine (*.exe ; *.exe.so)"
++msgid "Programs (*.exe; *.exe.so)"
++msgstr "Programmes (*.exe ; *.exe.so)"
+ 
+ #: programs/winecfg/winecfg.rc:62
+ msgid "Use global settings"
+@@ -20705,10 +20672,10 @@ msgstr "Barre de menu"
+ 
+ #: programs/wineconsole/wineconsole.rc:29
+ msgid ""
+-"wineconsole: Starting program %s failed.\n"
++"Console: Starting program %s failed.\n"
+ "The command is invalid.\n"
+ msgstr ""
+-"wineconsole : impossible de démarrer le programme %s.\n"
++"Console : impossible de démarrer le programme %s.\n"
+ "La commande est invalide.\n"
+ 
+ #: programs/winedbg/winedbg.rc:51 programs/winedbg/winedbg.rc:38
+@@ -20725,14 +20692,11 @@ msgstr ""
+ 
+ #: programs/winedbg/winedbg.rc:60
+ msgid ""
+-"This can be caused by a problem in the program or a deficiency in Wine. You "
+-"may want to check the <a href=\"https://appdb.winehq.org\">Application "
+-"Database</a> for tips about running this application."
++"This can be caused by a problem in the program, or by a part of Windows that "
++"Raye does not provide yet."
+ msgstr ""
+-"Cela peut être causé par une erreur dans le programme ou un défaut dans "
+-"Wine. Vous pouvez consulter la <a href=\"https://appdb.winehq.org\">base de "
+-"données d'applications</a> pour obtenir des conseils sur la façon d'exécuter "
+-"cette application."
++"Cela peut venir d'un problème dans le programme, ou d'une partie de Windows "
++"que Raye ne fournit pas encore."
+ 
+ #: programs/winedbg/winedbg.rc:63
+ msgid "Show &Details"
+@@ -20744,24 +20708,18 @@ msgstr "Détails de l'erreur du programme"
+ 
+ #: programs/winedbg/winedbg.rc:75
+ msgid ""
+-"If this problem is not present under Windows and has not been reported yet, "
+-"you can save the detailed information to a file using the \"Save As\" "
+-"button, then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/"
+-"Bugs\">file a bug report</a> and attach that file to the report."
++"You can save these details to a file with the \"Save As\" button and attach "
++"it when you report the problem."
+ msgstr ""
+-"Si ce problème ne se produit pas sous Windows et n'a pas déjà été rapporté, "
+-"vous pouvez enregistrer les informations détaillées dans un fichier en "
+-"utilisant le bouton « Enregistrer sous », et ensuite  <a href=\"https://"
+-"wiki.winehq.org/Bugs\">soumettre un rapport d'anomalie</a> en y attachant "
+-"ledit fichier."
++"Vous pouvez enregistrer ces détails dans un fichier avec le bouton « "
++"Enregistrer sous » et le joindre quand vous signalez le problème."
+ 
+ #: programs/winedbg/winedbg.rc:40
+ msgid ""
+-"A program on your system has crashed, but WineDbg was unable to attach to "
+-"the process to obtain a backtrace."
++"A program on your system has crashed, but Raye could not collect the details."
+ msgstr ""
+-"Un programme sur votre système a planté, mais WineDbg n'a pas pu s'y "
+-"attacher afin d'obtenir les informations sur le plantage."
++"Un programme de votre système a planté, mais Raye n'a pas pu recueillir les "
++"détails."
+ 
+ #: programs/winedbg/winedbg.rc:41
+ msgid "(unidentified)"
+@@ -20853,8 +20811,8 @@ msgid "Tile &Vertically\tCtrl+F4"
+ msgstr "Arranger &verticalement\tCtrl+F4"
+ 
+ #: programs/winefile/winefile.rc:84
+-msgid "&About Wine File Manager"
+-msgstr "À &propos du gestionnaire de fichiers de Wine"
++msgid "&About File Manager"
++msgstr "À &propos du gestionnaire de fichiers"
+ 
+ #: programs/winefile/winefile.rc:121
+ msgid "Select destination"
+@@ -20930,8 +20888,8 @@ msgid "Error while selecting new font."
+ msgstr "Erreur lors de la sélection de la nouvelle police."
+ 
+ #: programs/winefile/winefile.rc:96
+-msgid "Wine File Manager"
+-msgstr "Gestionnaire de fichiers de Wine"
++msgid "File Manager"
++msgstr "Gestionnaire de fichiers"
+ 
+ #: programs/winefile/winefile.rc:98
+ msgid "root fs"
+@@ -20994,8 +20952,8 @@ msgid "&Fastest Times"
+ msgstr "Meilleurs &temps"
+ 
+ #: programs/winemine/winemine.rc:54
+-msgid "&About WineMine"
+-msgstr "À &propos de WineMine"
++msgid "&About Mines"
++msgstr "À &propos de Mines"
+ 
+ #: programs/winemine/winemine.rc:61
+ msgid "Fastest Times"
+@@ -21042,6 +21000,7 @@ msgid "Columns"
+ msgstr "Colonnes"
+ 
+ #: programs/winemine/winemine.rc:94
++#: programs/winemine/winemine.rc:30
+ msgid "Mines"
+ msgstr "Mines"
+ 
+@@ -21049,10 +21008,6 @@ msgstr "Mines"
+ msgid "All results will be lost. Are you sure?"
+ msgstr "Tous les résultats seront perdus. Êtes-vous sûr ?"
+ 
+-#: programs/winemine/winemine.rc:30
+-msgid "WineMine"
+-msgstr "WineMine"
+-
+ #: programs/winemine/winemine.rc:31
+ msgid "Nobody"
+ msgstr "Anonyme"
+@@ -21098,8 +21053,8 @@ msgid "&Help on help\tF1"
+ msgstr "&Utiliser l'aide\tF1"
+ 
+ #: programs/winhlp32/winhlp32.rc:59
+-msgid "&About Wine Help"
+-msgstr "À &propos de l'aide de Wine"
++msgid "&About Help"
++msgstr "À &propos de l'aide"
+ 
+ #: programs/winhlp32/winhlp32.rc:67
+ msgid "Annotation..."
+@@ -21117,10 +21072,6 @@ msgstr "Index"
+ msgid "Search"
+ msgstr "Recherche"
+ 
+-#: programs/winhlp32/winhlp32.rc:81
+-msgid "Wine Help"
+-msgstr "Aide de Wine"
+-
+ #: programs/winhlp32/winhlp32.rc:86
+ msgid "Error while reading the help file `%s'"
+ msgstr "Erreur lors de la lecture du fichier d'aide « %s »"
+@@ -21294,8 +21245,8 @@ msgid "&Pale yellow\tCtrl+2"
+ msgstr "&Jaune pâle\tCtrl+2"
+ 
+ #: programs/wordpad/wordpad.rc:104
+-msgid "&About Wine Wordpad"
+-msgstr "À &propos du Wordpad de Wine"
++msgid "&About WordPad"
++msgstr "À &propos de WordPad"
+ 
+ #: programs/wordpad/wordpad.rc:141
+ msgid "Automatic"

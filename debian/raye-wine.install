@@ -1,0 +1,13 @@
+opt/raye-wine/bin
+opt/raye-wine/lib/wine/x86_64-unix
+opt/raye-wine/lib/wine/x86_64-windows
+opt/raye-wine/share/applications
+opt/raye-wine/share/wine/fonts
+opt/raye-wine/share/wine/nls
+opt/raye-wine/share/wine/wine.inf
+opt/raye-wine/share/wine/winmd
+usr/bin
+usr/lib
+usr/share/pipewire
+usr/share/raye
+var/lib/raye

@@ -1,0 +1,72 @@
+Subject: winedbg: plain words in the crash dialog
+
+The crash dialog says what happened in the words Raye uses, without
+links to the upstream bug tracker and application database. The details
+start with "Build:".
+---
+diff --git a/programs/winedbg/info.c b/programs/winedbg/info.c
+index feeaf42..d36c37b 100644
+--- a/programs/winedbg/info.c
++++ b/programs/winedbg/info.c
+@@ -1253,7 +1253,7 @@ void info_win32_system(void)
+     RtlWow64GetProcessMachines( GetCurrentProcess(), &current, &native );
+ 
+     dbg_printf( "System information:\n" );
+-    if (wine_get_build_id) dbg_printf( "    Wine build: %s\n", wine_get_build_id() );
++    if (wine_get_build_id) dbg_printf( "    Build: %s\n", wine_get_build_id() );
+     dbg_printf( "    Platform: %s", get_machine_str(native));
+     for (count = i = 0; i < ARRAY_SIZE(guest_machines); i++)
+     {
+diff --git a/programs/winedbg/winedbg.c b/programs/winedbg/winedbg.c
+index be2a349..8a56f21 100644
+--- a/programs/winedbg/winedbg.c
++++ b/programs/winedbg/winedbg.c
+@@ -623,7 +623,7 @@ void dbg_init_console(void)
+     SetConsoleCtrlHandler(ctrl_c_handler, TRUE);
+ 
+     /* set our own title */
+-    SetConsoleTitleA("Wine Debugger");
++    SetConsoleTitleA("Debugger");
+ }
+ 
+ static int dbg_winedbg_usage(BOOL advanced)
+diff --git a/programs/winedbg/winedbg.rc b/programs/winedbg/winedbg.rc
+index 6f2f7d1..b9dc9d0 100644
+--- a/programs/winedbg/winedbg.rc
++++ b/programs/winedbg/winedbg.rc
+@@ -35,8 +35,8 @@ END
+ STRINGTABLE
+ BEGIN
+     IDS_AUTO_CAPTION     "Program Error"
+-    IDS_INVALID_PARAMS   "A program on your system has crashed, but WineDbg was \
+-                         unable to attach to the process to obtain a backtrace."
++    IDS_INVALID_PARAMS   "A program on your system has crashed, but Raye could not \
++                         collect the details."
+     IDS_UNIDENTIFIED     "(unidentified)"
+     IDS_TEXT_FILES,      "Text files (*.txt)"
+     IDS_ALL_FILES,       "All files (*.*)"
+@@ -54,9 +54,8 @@ BEGIN
+     LTEXT           "The program %s has encountered a serious problem and needs \
+                     to close. We are sorry for the inconvenience.",
+                     IDC_STATIC_TXT1,27,10,224,30
+-    CONTROL         "This can be caused by a problem in the program or a deficiency in Wine. \
+-                    You may want to check the <a href=\"https://appdb.winehq.org\">Application Database</a> \
+-                    for tips about running this application.",
++    CONTROL         "This can be caused by a problem in the program, or by a part of Windows \
++                    that Raye does not provide yet.",
+                     IDC_STATIC_TXT2,"SysLink",0,27,60,224,100
+     DEFPUSHBUTTON   "Close", IDOK, 205, 151, 60, 16, WS_TABSTOP
+     PUSHBUTTON      "Show &Details", ID_DETAILS, 140, 151, 60, 16, WS_TABSTOP
+@@ -68,10 +67,8 @@ CAPTION "Program Error Details"
+ FONT 8, "MS Shell Dlg"
+ BEGIN
+     EDITTEXT        IDC_CRASH_TXT, 4, 4, 392, 272, ES_MULTILINE | ES_READONLY | WS_HSCROLL | WS_VSCROLL, WS_TABSTOP
+-    CONTROL         "If this problem is not present under Windows and has not been reported yet, \
+-                     you can save the detailed information to a file using the \"Save As\" button, \
+-                     then <a href=\"https://gitlab.winehq.org/wine/wine/-/wikis/Bugs\">file a bug report</a> \
+-                     and attach that file to the report.",
++    CONTROL         "You can save these details to a file with the \"Save As\" button \
++                     and attach it when you report the problem.",
+                     IDC_STATIC_TXT2,"SysLink",0,6,285,388,32
+     DEFPUSHBUTTON   "Close", IDOK, 326, 320, 70, 16, WS_TABSTOP
+     PUSHBUTTON      "&Save As...", ID_SAVEAS, 252, 320, 70, 16, WS_TABSTOP

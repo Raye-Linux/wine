@@ -1,0 +1,174 @@
+Subject: shell32, user32, explorer: Windows programs in About boxes and the shell
+
+The About box, the Run dialog, the shutdown question, the virtual
+desktop title and the system menu name Windows programs or Raye. The
+license text is the standard LGPL notice for a library.
+---
+diff --git a/dlls/shell32/shell32.rc b/dlls/shell32/shell32.rc
+index 6738ba8..3265942 100644
+--- a/dlls/shell32/shell32.rc
++++ b/dlls/shell32/shell32.rc
+@@ -188,7 +188,7 @@ the folder?"
+         IDS_RESTART_TITLE       "Restart"
+         IDS_RESTART_PROMPT      "Do you want to simulate a Windows reboot?"
+         IDS_SHUTDOWN_TITLE      "Shutdown"
+-        IDS_SHUTDOWN_PROMPT     "Do you want to shutdown your Wine session?"
++        IDS_SHUTDOWN_PROMPT     "Close all Windows programs?"
+ 
+         /* Run dialog */
+         IDS_RUNDLG_ERROR           "Unable to display Run dialog box (internal error)"
+@@ -238,7 +238,7 @@ the folder?"
+ 
+         IDS_NEW_MENU_FOLDER         "New &Folder"
+ 
+-	IDS_CPANEL_TITLE            "Wine Control Panel"
++	IDS_CPANEL_TITLE            "Control Panel"
+ 	IDS_CPANEL_NAME             "Name"
+ 	IDS_CPANEL_DESCRIPTION      "Description"
+ 
+@@ -254,18 +254,18 @@ the folder?"
+ 
+ STRINGTABLE
+ {
+-IDS_LICENSE_CAPTION,            "Wine License"
++IDS_LICENSE_CAPTION,            "License"
+ IDS_LICENSE,
+-"Wine is free software; you can redistribute it and/or \
++"This library is free software; you can redistribute it and/or \
+ modify it under the terms of the GNU Lesser General Public \
+ License as published by the Free Software Foundation; either \
+ version 2.1 of the License, or (at your option) any later version.\n\n\
+-Wine is distributed in the hope that it will be useful, \
++This library is distributed in the hope that it will be useful, \
+ but WITHOUT ANY WARRANTY; without even the implied warranty of \
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU \
+ Lesser General Public License for more details.\n\n\
+ You should have received a copy of the GNU Lesser General Public \
+-License along with Wine; if not, write to the Free Software \
++License along with this library; if not, write to the Free Software \
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA."
+ }
+ 
+@@ -321,13 +321,13 @@ CAPTION "About %s"
+ FONT 10, "MS Shell Dlg"
+ {
+  DEFPUSHBUTTON "OK", IDOK, 153, 133, 65, 14, WS_TABSTOP
+- PUSHBUTTON "Wine &license", IDC_ABOUT_LICENSE, 153, 113, 65, 14, WS_TABSTOP
++ PUSHBUTTON "&License", IDC_ABOUT_LICENSE, 153, 113, 65, 14, WS_TABSTOP
+  LISTBOX IDC_ABOUT_LISTBOX, 8, 65, 137, 82, LBS_NOTIFY | WS_VSCROLL | WS_BORDER
+  ICON "", stc1, 10, 10, 30, 30
+  LTEXT "", IDC_ABOUT_STATIC_TEXT1, 42, 10, 180, 10
+  LTEXT "", IDC_ABOUT_STATIC_TEXT2, 42, 22, 180, 10
+  LTEXT "Running on %s", IDC_ABOUT_STATIC_TEXT3, 42, 34, 180, 10
+- LTEXT "Wine was brought to you by:", IDC_ABOUT_WINE_TEXT, 8, 54, 214, 10
++ LTEXT "Windows programs in Raye exist thanks to:", IDC_ABOUT_WINE_TEXT, 8, 54, 214, 10
+ }
+ 
+ SHELL_RUN_DLG DIALOG 0, 0, 235, 83
+@@ -336,7 +336,7 @@ CAPTION "Run"
+ FONT 8, "MS Shell Dlg"
+ {
+  ICON "", IDC_RUNDLG_ICON, 7, 11, 18, 20, WS_VISIBLE
+- LTEXT "Type the name of a program, folder, document, or Internet resource, and Wine will open it for you.", IDC_RUNDLG_DESCRIPTION, 45, 8, 194, 28
++ LTEXT "Type the name of a program, folder, document, or Internet resource, and Raye will open it for you.", IDC_RUNDLG_DESCRIPTION, 45, 8, 194, 28
+  LTEXT "&Open:", IDC_RUNDLG_LABEL, 7, 39, 35, 10
+  CONTROL "", IDC_RUNDLG_EDITPATH, "COMBOBOX", WS_TABSTOP | WS_GROUP | WS_VSCROLL | WS_VISIBLE | CBS_DISABLENOSCROLL | CBS_AUTOHSCROLL | CBS_DROPDOWN, 45, 37, 185, 100
+  DEFPUSHBUTTON "OK", IDOK, 72, 63, 50, 14, WS_TABSTOP
+diff --git a/dlls/user32/nonclient.c b/dlls/user32/nonclient.c
+index d65e7c9..f3d1782 100644
+--- a/dlls/user32/nonclient.c
++++ b/dlls/user32/nonclient.c
+@@ -88,7 +88,7 @@ LRESULT NC_HandleSysCommand( HWND hwnd, WPARAM wParam, LPARAM lParam )
+                 aboutproc = (void *)GetProcAddress( hmodule, "ShellAboutA" );
+                 if (p_wine_get_version && aboutproc)
+                 {
+-                    snprintf( app, ARRAY_SIZE(app), "Wine %s", p_wine_get_version() );
++                    snprintf( app, ARRAY_SIZE(app), "Windows programs %s", p_wine_get_version() );
+                     aboutproc( hwnd, app, NULL, 0 );
+                 }
+                 FreeLibrary( hmodule );
+diff --git a/dlls/user32/user32.rc b/dlls/user32/user32.rc
+index d3c1f3e..db59ec5 100644
+--- a/dlls/user32/user32.rc
++++ b/dlls/user32/user32.rc
+@@ -34,7 +34,7 @@ SYSMENU MENU
+     MENUITEM SEPARATOR
+     MENUITEM "&Close\tAlt+F4", 61536
+     MENUITEM SEPARATOR
+-    MENUITEM "&About Wine", 61761
++    MENUITEM "&About Windows programs", 61761
+ }
+ 
+ SYSMENUMDI MENU
+diff --git a/dlls/winemac.drv/winemac.rc b/dlls/winemac.drv/winemac.rc
+index b77b2c5..736b813 100644
+--- a/dlls/winemac.drv/winemac.rc
++++ b/dlls/winemac.drv/winemac.rc
+@@ -28,7 +28,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+ 
+ STRINGTABLE
+ {
+-    STRING_MENU_WINE                        "Wine"
++    STRING_MENU_WINE                        "Windows programs"
+     STRING_MENU_ITEM_HIDE_APPNAME           "Hide %@"
+     STRING_MENU_ITEM_HIDE                   "Hide"
+     STRING_MENU_ITEM_HIDE_OTHERS            "Hide Others"
+diff --git a/programs/explorer/explorer.rc b/programs/explorer/explorer.rc
+index 5db3b52..ac61ef8 100644
+--- a/programs/explorer/explorer.rc
++++ b/programs/explorer/explorer.rc
+@@ -28,13 +28,13 @@ LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+ 
+ STRINGTABLE
+ {
+-    IDS_EXPLORER_TITLE  "Wine Explorer"
++    IDS_EXPLORER_TITLE  "File Explorer"
+     IDS_PATHBOX_LABEL   "Location:"
+     IDS_START_LABEL     "Start"
+     IDS_RUN             "&Run..."
+     IDS_EXIT_LABEL      "E&xit desktop"
+     IDS_EXIT_PROMPT     "Are you sure you want to close all programs and exit the virtual desktop?"
+-    IDS_DESKTOP_TITLE   "Wine Desktop"
++    IDS_DESKTOP_TITLE   "Windows programs"
+ }
+ 
+ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+diff --git a/programs/explorer/startmenu.c b/programs/explorer/startmenu.c
+index 33a0d0c..65359b7 100644
+--- a/programs/explorer/startmenu.c
++++ b/programs/explorer/startmenu.c
+@@ -406,7 +406,7 @@ static void shut_down(HWND hwnd)
+     int ret;
+ 
+     LoadStringW(NULL, IDS_EXIT_PROMPT, prompt, ARRAY_SIZE(prompt));
+-    ret = MessageBoxW(hwnd, prompt, L"Wine", MB_YESNO|MB_ICONQUESTION|MB_SYSTEMMODAL);
++    ret = MessageBoxW(hwnd, prompt, L"Raye", MB_YESNO|MB_ICONQUESTION|MB_SYSTEMMODAL);
+     if (ret == IDYES)
+         ExitWindows(0, 0);
+ }
+diff --git a/programs/notepad/dialog.c b/programs/notepad/dialog.c
+index 5940e0f..36bc4d7 100644
+--- a/programs/notepad/dialog.c
++++ b/programs/notepad/dialog.c
+@@ -1185,7 +1185,7 @@ VOID DIALOG_HelpAboutNotepad(VOID)
+                             IMAGE_ICON, 48, 48, LR_SHARED);
+ 
+     LoadStringW(Globals.hInstance, STRING_NOTEPAD, szNotepad, ARRAY_SIZE(szNotepad));
+-    ShellAboutW(Globals.hMainWnd, szNotepad, L"Wine Notepad", icon);
++    ShellAboutW(Globals.hMainWnd, szNotepad, NULL, icon);
+ }
+ 
+ 
+diff --git a/programs/winver/winver.c b/programs/winver/winver.c
+index ee31204..fe61441 100644
+--- a/programs/winver/winver.c
++++ b/programs/winver/winver.c
+@@ -24,7 +24,7 @@
+ 
+ int PASCAL WinMain (HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
+ {
+-    char name[128] = "Wine ";
++    char name[128] = "Windows programs ";
+     const char * (CDECL *wine_get_version)(void);
+ 
+     InitCommonControls();

@@ -1,0 +1,225 @@
+Subject: winepulse: Stereo Mix, and loopback that follows the default output
+
+Recording programs (OBS, TikTok Live Studio, Discord, Teams) look for a
+"Stereo Mix" capture device to record what the computer plays, as most
+Windows sound cards offer. Add one ("Mixage stéréo" in French). It records
+the monitor of the default output through a PipeWire stream with
+stream.capture.sink and no target, so PipeWire moves it to the new
+default output when that changes, Bluetooth headsets included.
+
+Loopback capture (AUDCLNT_STREAMFLAGS_LOOPBACK) on the default output
+uses the same stream, so it follows too; before, it stayed on the output
+that was the default when the stream opened. Loopback on a given output
+still records that output's monitor.
+
+The sound server's "Monitor of ..." sources no longer show up as
+microphones; they stay known for loopback.
+
+Capture streams also stop losing sound silently: the server sends a
+whole graph cycle at a time (1024 frames or more with Bluetooth or in a
+virtual machine), which could be more than the buffer the program asked
+for, and the server dropped what did not fit before it was read. The
+server buffer is no longer capped, and the capture buffer holds at least
+100 ms (Windows may also give more than asked); a program that falls
+behind still gets the newest sound, with the gap flagged.
+---
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index fea1825..5d9bc15 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -105,11 +105,16 @@ typedef struct _PhysDevice {
+     UINT index;
+     REFERENCE_TIME min_period, def_period;
+     WAVEFORMATEXTENSIBLE fmt;
++    BOOL hidden;
+     char pulse_name[0];
+ } PhysDevice;
+ 
++/* Capture endpoint that records whatever the default output plays. */
++static const char default_monitor[] = "@DEFAULT_MONITOR@";
++
+ static pa_context *pulse_ctx;
+ static pa_mainloop *pulse_ml;
++static BOOL pulse_on_pipewire;
+ 
+ static struct list g_phys_speakers = LIST_INIT(g_phys_speakers);
+ static struct list g_phys_sources = LIST_INIT(g_phys_sources);
+@@ -327,10 +332,14 @@ static NTSTATUS pulse_get_endpoint_ids(void *args)
+     unsigned int offset;
+     PhysDevice *dev;
+ 
+-    params->num = list_count(list);
++    params->num = 0;
++    LIST_FOR_EACH_ENTRY(dev, list, PhysDevice, entry)
++        if (!dev->hidden) params->num++;
+     offset = needed = params->num * sizeof(*params->endpoints);
+ 
+     LIST_FOR_EACH_ENTRY(dev, list, PhysDevice, entry) {
++        if (dev->hidden)
++            continue;
+         name_len = lstrlenW(dev->name) + 1;
+         len = strlen(dev->pulse_name) + 1;
+         needed += name_len * sizeof(WCHAR) + ((len + 1) & ~1);
+@@ -596,30 +605,32 @@ static void fill_device_info(PhysDevice *dev, pa_proplist *p)
+         dev->product_id = strtol(buffer, NULL, 16);
+ }
+ 
+-static void pulse_add_device(struct list *list, pa_proplist *proplist, int index, EndpointFormFactor form,
+-                             UINT channel_mask, const char *pulse_name, const char *desc)
++static PhysDevice *pulse_add_device(struct list *list, pa_proplist *proplist, int index, EndpointFormFactor form,
++                                    UINT channel_mask, const char *pulse_name, const char *desc)
+ {
+     size_t len = strlen(pulse_name);
+     PhysDevice *dev = malloc(FIELD_OFFSET(PhysDevice, pulse_name[len + 1]));
+ 
+     if (!dev)
+-        return;
++        return NULL;
+ 
+     if (!(dev->name = get_device_name(desc, proplist))) {
+         free(dev);
+-        return;
++        return NULL;
+     }
+     dev->form = form;
+     dev->index = index;
+     dev->channel_mask = channel_mask;
+     dev->def_period = 0;
+     dev->min_period = 0;
++    dev->hidden = FALSE;
+     fill_device_info(dev, proplist);
+     memcpy(dev->pulse_name, pulse_name, len + 1);
+ 
+     list_add_tail(list, &dev->entry);
+ 
+     TRACE("%s\n", debugstr_w(dev->name));
++    return dev;
+ }
+ 
+ static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol, void *userdata)
+@@ -642,10 +653,23 @@ static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol
+ 
+ static void pulse_phys_sources_cb(pa_context *c, const pa_source_info *i, int eol, void *userdata)
+ {
++    PhysDevice *dev;
++
+     if (!i || !i->name || !i->name[0])
+         return;
+-    pulse_add_device(&g_phys_sources, i->proplist, i->index,
++    dev = pulse_add_device(&g_phys_sources, i->proplist, i->index,
+         (i->monitor_of_sink == PA_INVALID_INDEX) ? Microphone : LineLevel, 0, i->name, i->description);
++
++    /* Windows has no "Monitor of" devices: programs record an output with
++     * loopback capture or with Stereo Mix. Keep monitors for loopback, but out
++     * of the device list. */
++    if (dev && i->monitor_of_sink != PA_INVALID_INDEX)
++        dev->hidden = TRUE;
++}
++
++static void pulse_server_info_cb(pa_context *c, const pa_server_info *i, void *userdata)
++{
++    pulse_on_pipewire = i && i->server_name && strstr(i->server_name, "PipeWire");
+ }
+ 
+ /* For most hardware on Windows, users must choose a configuration with an even
+@@ -885,6 +909,16 @@ static NTSTATUS pulse_test_connect(void *args)
+                      french ? "Sortie par défaut" : "Default output");
+     pulse_add_device(&g_phys_sources, NULL, 0, Microphone, 0, "",
+                      french ? "Entrée par défaut" : "Default input");
++    pulse_add_device(&g_phys_sources, NULL, 0, LineLevel, 0, default_monitor,
++                     french ? "Mixage stéréo" : "Stereo Mix");
++
++    o = pa_context_get_server_info(pulse_ctx, &pulse_server_info_cb, NULL);
++    if (o) {
++        while (pa_mainloop_iterate(pulse_ml, 1, &ret) >= 0 &&
++                pa_operation_get_state(o) == PA_OPERATION_RUNNING)
++        {}
++        pa_operation_unref(o);
++    }
+ 
+     o = pa_context_get_sink_info_list(pulse_ctx, &pulse_phys_speakers_cb, NULL);
+     if (o) {
+@@ -1081,10 +1115,22 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *pul
+     char buffer[64];
+     static LONG number;
+     pa_buffer_attr attr;
++    pa_proplist *props = NULL;
+ 
+     ret = InterlockedIncrement(&number);
+     sprintf(buffer, "audio stream #%i", ret);
+-    stream->stream = pa_stream_new(pulse_ctx, buffer, &stream->ss, &stream->map);
++
++    /* PipeWire keeps a monitor stream with no target on whatever output is the
++     * default, and moves it when the default changes. A named monitor would
++     * stay on the output that was default when the stream was opened. */
++    if (stream->dataflow == eCapture && !strcmp(pulse_name, default_monitor) && pulse_on_pipewire) {
++        if ((props = pa_proplist_new()))
++            pa_proplist_sets(props, "stream.capture.sink", "true");
++        pulse_name = "";
++    }
++    stream->stream = pa_stream_new_with_proplist(pulse_ctx, buffer, &stream->ss, &stream->map, props);
++    if (props)
++        pa_proplist_free(props);
+ 
+     if (!stream->stream) {
+         WARN("pa_stream_new returned error %i\n", pa_context_errno(pulse_ctx));
+@@ -1099,14 +1145,21 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *pul
+     attr.minreq = attr.fragsize = period_bytes;
+     attr.tlength = period_bytes * 3;
+     attr.maxlength = stream->bufsize_frames * pa_frame_size(&stream->ss);
++    /* The server sends captured sound a whole graph cycle at a time, up to
++     * 1024 frames or more (Bluetooth, virtual machines), which can be more
++     * than the program's buffer. Capped at that, it drops what does not
++     * fit before we read it, and nothing tells the program. The packets
++     * we keep stay limited to the program's buffer. */
++    if (stream->dataflow == eCapture)
++        attr.maxlength = -1;
+     attr.prebuf = pa_frame_size(&stream->ss);
+     dump_attr(&attr);
+ 
+     /* If specific device was requested, use it exactly */
+-    if (pulse_name[0])
+-        flags |= PA_STREAM_DONT_MOVE;
+-    else
++    if (!pulse_name[0])
+         pulse_name = NULL;  /* use default */
++    else if (strcmp(pulse_name, default_monitor))
++        flags |= PA_STREAM_DONT_MOVE;
+ 
+     if (stream->dataflow == eRender)
+         ret = pa_stream_connect_playback(stream->stream, pulse_name, &attr, flags|PA_STREAM_VARIABLE_RATE, NULL, NULL);
+@@ -1230,6 +1283,10 @@ static NTSTATUS pulse_create_stream(void *args)
+         } else {
+             UINT32 i, capture_packets;
+ 
++            /* The server sends a whole graph cycle at a time, 1024 frames or
++             * more with Bluetooth or in a virtual machine; keep room for a few
++             * of them. Windows may give a larger capture buffer than asked. */
++            bufsize_bytes = max(bufsize_bytes, pa_usec_to_bytes(100000, &stream->ss));
+             if ((unalign = bufsize_bytes % stream->period_bytes))
+                 bufsize_bytes += stream->period_bytes - unalign;
+             stream->bufsize_frames = bufsize_bytes / pa_frame_size(&stream->ss);
+@@ -2176,6 +2233,23 @@ static NTSTATUS pulse_get_loopback_capture_device(void *args)
+     device_name = params->device;
+     if (device_name && !device_name[0]) device_name = NULL;
+ 
++    /* Loopback on the default output follows it, like Stereo Mix. */
++    if (!device_name)
++    {
++        if (sizeof(default_monitor) <= params->ret_device_len)
++        {
++            memcpy(params->ret_device, default_monitor, sizeof(default_monitor));
++            params->result = STATUS_SUCCESS;
++        }
++        else
++        {
++            params->ret_device_len = sizeof(default_monitor);
++            params->result = STATUS_BUFFER_TOO_SMALL;
++        }
++        pulse_unlock();
++        return STATUS_SUCCESS;
++    }
++
+     params->result = E_FAIL;
+     wait_pa_operation_complete(pa_context_get_sink_info_by_name(pulse_ctx, device_name, &sink_name_info_cb, &current_device_index));
+     if (current_device_index != PA_INVALID_INDEX)

@@ -1,0 +1,152 @@
+# What Raye knows about each Windows game and program, read before a
+# download starts so nobody waits forty gigabytes to be told no.
+#
+# Dropped in, never baked in: the Store and the games space read every
+# *.titles file of
+#
+#   /usr/share/raye/windows-titles      shipped with the package
+#   /var/lib/raye/windows-titles        dropped in later, no image rebuild
+#
+# in that order, file name order inside each, and the LAST file that
+# names a title wins. So, lowest answer first:
+#
+#   00-upstream.titles   generated from a community list, 249 titles,
+#                        nothing but what publishers did
+#   50-raye.titles       this file: what Raye verified itself, and it
+#                        overrides the generated answer
+#   /var/lib/.../*       anything dropped in later overrides both, which
+#                        is how a title changes without an image rebuild
+#
+# The numbers are the whole mechanism: a hand-verified answer must never
+# be buried by a regenerated list. raye-windows-titles is the reader.
+#
+# Two columns that must never be confused:
+#
+#   state      what RAYE has verified, on a real machine, with a date.
+#              works         played here, start to finish
+#              offline-only  the solo or training side plays here, the
+#                            online side does not
+#              blocked       refused here, and the reason is not a bug
+#                            we can fix
+#              untested      nobody has played it here
+#              ⚠️ works and offline-only REQUIRE tested_on and tested_at.
+#              A launcher that opened is not a game that played.
+#
+#   upstream   what the PUBLISHER has done, with a source and a date.
+#              runtime-enabled  it turned its anti-cheat's Linux module on
+#              refused          it said no, or its anti-cheat cannot work
+#                               outside Windows by design
+#              none             the title has no anti-cheat
+#              unknown          nothing public either way
+#              ⚠️ runtime-enabled is NOT a promise that it plays here.
+#              It is the publisher's half of the bargain, not ours.
+#
+# Other keys: name, anticheat, size_mb (what a "no" saves the user),
+# profile (the .profile whose match= patterns name the download),
+# why_en / why_fr (ONE line, shown before the download), source.
+#
+# Never in here: a way around an anti-cheat. A title whose protection
+# refuses this system is a "no" written in the interface. Working around
+# it gets the player's account banned, and it is the reason publishers
+# give for keeping away from Linux.
+
+[roblox-studio]
+name      = Roblox Studio
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 3100
+profile   = roblox-studio
+why_en    = Installs and opens its sign-in page; it needs a Roblox account, with no offline mode. Signing in has not worked here yet.
+why_fr    = S'installe et ouvre sa page de connexion ; il faut un compte Roblox, sans mode hors ligne. La connexion n'a pas encore marché ici.
+source    = vinegarhq/vinegar runs RobloxStudioBeta.exe through this layer (cmd/vinegar/bootstrapper_run.go, master, read 2026-11-06); measured 2026-11-12 in the test VM (raye-wine 11.21, no graphics card): Studio 0.747.0.7471481 fills a 3.1 GB space, its sign-in page draws but takes no typing and its web view stops after about 65 s
+
+[roblox]
+name      = Roblox
+state     = blocked
+upstream  = refused
+anticheat = hyperion
+size_mb   = 400
+profile   = roblox
+why_en    = Roblox blocks this system on purpose; its publisher has to allow it.
+why_fr    = Roblox bloque ce système exprès ; c'est à son éditeur de l'autoriser.
+source    = areweanticheatyet.com games.json @ 6c26305 (2026-10-24): Denied, Hyperion, update "Wine Support Yanked" 2024-03-01
+
+[rocket-league]
+name      = Rocket League
+state     = untested
+upstream  = unknown
+anticheat = easy-anti-cheat
+size_mb   = 23000
+profile   =
+why_en    = Its own store page says online play was switched off here in 2020 and only offline modes remain; a later note says that changed. Nobody has checked on Raye.
+why_fr    = Sa page de vente dit que le jeu en ligne a été coupé ici en 2020 et qu'il ne reste que le hors ligne ; une note plus récente dit le contraire. Personne ne l'a vérifié sur Raye.
+source    = CONFLICT: store.steampowered.com/app/252950 (read 2026-11-06) "This update disabled online functionality ... but offline features including Local Matches, and splitscreen play are still accessible" (2020-03-10) vs areweanticheatyet games.json @ 6c26305 "Supported / EAC added. Steam Deck and Linux are supported" sourced only to an x.com post nobody here could read
+
+[fortnite]
+name      = Fortnite
+state     = blocked
+upstream  = refused
+anticheat = easy-anti-cheat
+size_mb   = 40000
+profile   =
+why_en    = Epic has not turned on the Linux side of its anti-cheat; the game refuses to start here.
+why_fr    = Epic n'a pas activé la partie Linux de son anti-triche ; le jeu refuse de démarrer ici.
+source    = areweanticheatyet.com games.json @ 6c26305 (2026-10-24): Denied, Easy Anti-Cheat
+
+[valorant]
+name      = Valorant
+state     = blocked
+upstream  = refused
+anticheat = vanguard
+size_mb   = 30000
+profile   =
+why_en    = Its anti-cheat is a Windows kernel driver, so no layer can run it. Riot has said no.
+why_fr    = Son anti-triche est un pilote noyau Windows : aucune couche ne peut l'exécuter. Riot a dit non.
+source    = areweanticheatyet.com games.json @ 6c26305 (2026-10-24): Denied, Vanguard, 2024-01-26 "Vanguard developer claims Linux has too much attack surface"
+
+[obs]
+name      = OBS Studio
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 150
+profile   = obs
+why_en    = OBS Studio is made for Raye too, and that is the one to use here; the Windows build is not ready yet.
+why_fr    = OBS Studio existe aussi pour Raye, et c'est celle-là qu'il faut prendre ici ; la version Windows n'est pas encore prête.
+source    = github.com/obsproject/obs-studio release 33.0.1 (2026-10-29) ships OBS-Studio-33.0.1-Windows-x64-Installer.exe; Raye offers the Linux build as com.obsproject.Studio; measured 2026-11-12 in the test VM: the Windows 33.0.1 stops at start on the shipped raye-wine 11.21 (GDI32 D3DKMTSetProcessSchedulingPriorityClass, fixed by patches/base/0013, not packaged), and once past that it opens its own warning window about the layer at every start; the Linux build recorded picture and sound in step
+
+[minecraft]
+name      = Minecraft for Windows (launcher and Bedrock Edition)
+state     = blocked
+upstream  = refused
+anticheat = none
+size_mb   = 1500
+profile   = minecraft
+why_en    = Its Windows launcher and Bedrock Edition need the Microsoft Store and the Windows Runtime, which this system does not have. Java Edition has a Linux launcher: it is in the Store.
+why_fr    = Son lanceur Windows et l'édition Bedrock exigent le Microsoft Store et le Windows Runtime, absents de ce système. L'édition Java a un lanceur Linux : il est dans le Store.
+source    = measured 2026-11-11, raye-wine 11.21: MinecraftInstaller.exe from minecraft.net quits with "Could not load file or assembly 'Windows.Foundation.UniversalApiContract'" and no window; minecraft.net/download (read 2026-11-11) offers Linux only the Java launcher (Debian, Arch, other distributions) and installs the Windows one through the Microsoft Store
+
+[winrar]
+name      = WinRAR
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 10
+profile   =
+tested_on = the test VM, Raye 0.3 with raye-wine 11.21 and raye-base built from iso main (c575148, not published yet), no graphics card (software rendering)
+tested_at = 2026-11-12
+why_en    = Installs, extracts archives and uninstalls here.
+why_fr    = S'installe, extrait les archives et se désinstalle ici.
+source    = measured 2026-11-11, checked again 2026-11-12: winrar-x64-723.exe by double-click, Start entry, opens from Start, a 61.7 MB zip extracted byte for byte; uninstalled (rc 0, space gone) by the command Settings runs, with the runner of iso c575148; with the runner of the published 0.3 Settings says it couldn't uninstall it, and the Settings button has not been tried with the fix yet; says nothing about speed on real hardware
+
+[vlc-windows]
+name      = VLC media player (Windows version)
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 190
+profile   =
+why_en    = Installs, plays sound and uninstalls here, but no video has been tried yet; VLC for Raye, in the Store, is the one to use.
+why_fr    = S'installe, joue le son et se désinstalle ici, mais aucune vidéo n'a encore été essayée ; VLC pour Raye, dans le Store, est celle à prendre.
+source    = measured 2026-11-11 in the test VM (raye-wine 11.21, no graphics card): vlc-3.0.24-win64.exe by double-click ("Windows" chosen), Start entries, an .oga played as a PipeWire stream, uninstalled by raye-windows uninstall (rc 0); a video player that has played no video is not marked works

@@ -1,0 +1,8 @@
+RAYE_CAPTURE_1 {
+    global:
+        rcap_session_open; rcap_session_unref; rcap_session_state;
+        rcap_session_stream_count; rcap_session_stream_info; rcap_session_find_stream;
+        rcap_wait_frame; rcap_copy_frame; rcap_copy_cursor;
+        rcap_gdi_read_asks;
+    local: *;
+};

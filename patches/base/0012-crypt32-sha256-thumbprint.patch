@@ -1,0 +1,40 @@
+Subject: crypt32: give certificates their SHA-256 thumbprint
+
+CertGetCertificateContextProperty(CERT_SHA256_HASH_PROP_ID) failed, so
+an installer that checks its signer by SHA-256 (Paint.NET) said its own
+files were damaged.
+---
+diff --git a/dlls/crypt32/cert.c b/dlls/crypt32/cert.c
+--- a/dlls/crypt32/cert.c
++++ b/dlls/crypt32/cert.c
+@@ -561,6 +561,11 @@
+              cert->ctx.pbCertEncoded, cert->ctx.cbCertEncoded, pvData,
+              pcbData);
+             break;
++        case CERT_SHA256_HASH_PROP_ID:
++            ret = CertContext_GetHashProp(cert, dwPropId, CALG_SHA_256,
++             cert->ctx.pbCertEncoded, cert->ctx.cbCertEncoded, pvData,
++             pcbData);
++            break;
+         case CERT_SUBJECT_NAME_MD5_HASH_PROP_ID:
+             ret = CertContext_GetHashProp(cert, dwPropId, CALG_MD5,
+              cert->ctx.pCertInfo->Subject.pbData,
+@@ -806,6 +811,7 @@
+         case CERT_HASH_PROP_ID:
+         case CERT_KEY_IDENTIFIER_PROP_ID:
+         case CERT_MD5_HASH_PROP_ID:
++        case CERT_SHA256_HASH_PROP_ID:
+         case CERT_NEXT_UPDATE_LOCATION_PROP_ID:
+         case CERT_PUBKEY_ALG_PARA_PROP_ID:
+         case CERT_PVK_FILE_PROP_ID:
+diff --git a/include/wincrypt.h b/include/wincrypt.h
+--- a/include/wincrypt.h
++++ b/include/wincrypt.h
+@@ -2599,6 +2599,7 @@
+ #define CERT_ROOT_PROGRAM_NAME_CONSTRAINTS_PROP_ID 84
+ 
+ #define CERT_SIGN_HASH_CNG_ALG_PROP_ID             89
++#define CERT_SHA256_HASH_PROP_ID                   107
+ 
+ #define CERT_FIRST_RESERVED_PROP_ID                130
+ #define CERT_LAST_RESERVED_PROP_ID                 0x00007fff

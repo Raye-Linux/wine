@@ -1,0 +1,37 @@
+Subject: dxgi: Duplicate outputs through rayecap
+
+DuplicateOutput and DuplicateOutput1 were not implemented. When the
+Windows layer provides rayecap.dll, hand them to it: its duplication
+object only uses the public D3D11 interface of our device. Without it the
+old answer, DXGI_ERROR_UNSUPPORTED, stays.
+---
+diff --git a/src/dxgi/dxgi_output.cpp b/src/dxgi/dxgi_output.cpp
+index 8814f5c..e6ed406 100644
+--- a/src/dxgi/dxgi_output.cpp
++++ b/src/dxgi/dxgi_output.cpp
+@@ -510,7 +510,24 @@ namespace dxvk {
+ 
+     if (!pDevice)
+       return E_INVALIDARG;
+-    
++
++    // Raye's Windows layer answers screen duplication with the desktop's
++    // screens, through the system share picker. The object it returns only
++    // uses the public D3D11 interface of the device, so it works on ours.
++    using PFN_RayeCaptureDuplicateOutput = HRESULT (WINAPI *)(
++      IDXGIOutput*, IUnknown*, UINT, const int*, IDXGIOutputDuplication**);
++
++    static PFN_RayeCaptureDuplicateOutput s_duplicate = [] () -> PFN_RayeCaptureDuplicateOutput {
++      HMODULE module = ::LoadLibraryA("rayecap.dll");
++      return module ? reinterpret_cast<PFN_RayeCaptureDuplicateOutput>(
++        reinterpret_cast<void*>(::GetProcAddress(module, "RayeCaptureDuplicateOutput"))) : nullptr;
++    } ();
++
++    if (s_duplicate) {
++      return s_duplicate(this, pDevice, SupportedFormatsCount,
++        reinterpret_cast<const int*>(pSupportedFormats), ppOutputDuplication);
++    }
++
+     static bool s_errorShown = false;
+ 
+     if (!std::exchange(s_errorShown, true))

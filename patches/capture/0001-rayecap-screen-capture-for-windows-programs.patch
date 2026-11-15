@@ -1,0 +1,1129 @@
+Subject: rayecap: screen capture for Windows programs
+
+A new dll that answers screen capture with the desktop's screens, through
+the ScreenCast portal and PipeWire. The work is done by libraye-capture,
+loaded with dlopen on first use, so Wine runs as before without it.
+RayeCaptureDuplicateOutput() is a whole IDXGIOutputDuplication that only
+uses the public D3D11 interface of the program's device: Wine's dxgi and
+DXVK's dxgi both hand DuplicateOutput over to it.
+---
+--- a/configure
++++ b/configure
+@@ -1447,6 +1447,7 @@
+ enable_rasapi32
+ enable_rasdlg
+ enable_rayeasio
++enable_rayecap
+ enable_regapi
+ enable_resampledmo
+ enable_resutils
+@@ -22576,6 +22577,7 @@
+ wine_fn_config_makefile dlls/rasapi32/tests enable_tests
+ wine_fn_config_makefile dlls/rasdlg enable_rasdlg
+ wine_fn_config_makefile dlls/rayeasio enable_rayeasio
++wine_fn_config_makefile dlls/rayecap enable_rayecap
+ wine_fn_config_makefile dlls/regapi enable_regapi
+ wine_fn_config_makefile dlls/resampledmo enable_resampledmo
+ wine_fn_config_makefile dlls/resutils enable_resutils
+--- a/configure.ac
++++ b/configure.ac
+@@ -3073,6 +3073,7 @@
+ WINE_CONFIG_MAKEFILE(dlls/rasapi32/tests)
+ WINE_CONFIG_MAKEFILE(dlls/rasdlg)
+ WINE_CONFIG_MAKEFILE(dlls/rayeasio)
++WINE_CONFIG_MAKEFILE(dlls/rayecap)
+ WINE_CONFIG_MAKEFILE(dlls/regapi)
+ WINE_CONFIG_MAKEFILE(dlls/resampledmo)
+ WINE_CONFIG_MAKEFILE(dlls/resutils)
+diff --git a/dlls/rayecap/Makefile.in b/dlls/rayecap/Makefile.in
+new file mode 100644
+index 0000000..fc6f46b
+--- /dev/null
++++ b/dlls/rayecap/Makefile.in
+@@ -0,0 +1,12 @@
++MODULE    = rayecap.dll
++UNIXLIB   = rayecap.so
++IMPORTLIB = rayecap
++IMPORTS   = dxguid uuid user32
++UNIX_LIBS = $(DL_LIBS)
++
++VER_FILEDESCRIPTION_STR = "Screen capture for Windows programs"
++
++SOURCES = \
++	duplication.c \
++	main.c \
++	unixlib.c
+diff --git a/dlls/rayecap/duplication.c b/dlls/rayecap/duplication.c
+new file mode 100644
+index 0000000..80fdb1b
+--- /dev/null
++++ b/dlls/rayecap/duplication.c
+@@ -0,0 +1,486 @@
++/*
++ * IDXGIOutputDuplication over the desktop's screens. Any DXGI can hand
++ * DuplicateOutput over to RayeCaptureDuplicateOutput(): the object only
++ * uses the public Direct3D 11 interface of the program's device.
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <stdarg.h>
++#include <stdlib.h>
++
++#define COBJMACROS
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winbase.h"
++#include "winuser.h"
++#include "d3d11.h"
++#include "dxgi1_6.h"
++#include "wine/debug.h"
++
++#include "rayecap.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(rayecap);
++
++#define MAX_MONITORS 64
++
++struct duplication
++{
++    IDXGIOutputDuplication IDXGIOutputDuplication_iface;
++    LONG refcount;
++
++    IDXGIOutput *output;
++    ID3D11Device *device;
++    ID3D11DeviceContext *context;
++    ID3D11Texture2D *texture;
++    HRAYECAP session;
++    HMONITOR monitor;
++    RECT desktop;
++    UINT width, height;
++
++    int stream;
++    UINT64 seq;
++    INT64 cursor_ns;
++    UINT64 cursor_seq;
++    BOOL held, new_image;
++    struct rayecap_frame frame;
++    BYTE *pixels, *scaled;
++    SIZE_T pixels_size;
++};
++
++static inline struct duplication *impl_from_IDXGIOutputDuplication( IDXGIOutputDuplication *iface )
++{
++    return CONTAINING_RECORD( iface, struct duplication, IDXGIOutputDuplication_iface );
++}
++
++struct monitors
++{
++    HMONITOR handles[MAX_MONITORS];
++    RECT rects[MAX_MONITORS];
++    UINT count;
++};
++
++static BOOL CALLBACK add_monitor( HMONITOR monitor, HDC hdc, RECT *rect, LPARAM lparam )
++{
++    struct monitors *list = (struct monitors *)lparam;
++    MONITORINFO info = { .cbSize = sizeof(info) };
++
++    if (list->count == MAX_MONITORS) return FALSE;
++    if (!GetMonitorInfoW( monitor, &info )) return TRUE;
++    list->handles[list->count] = monitor;
++    list->rects[list->count++] = info.rcMonitor;
++    return TRUE;
++}
++
++static int find_stream( struct duplication *dup )
++{
++    struct monitors list = { 0 };
++    RECT rect;
++    UINT i;
++
++    EnumDisplayMonitors( NULL, NULL, add_monitor, (LPARAM)&list );
++    for (i = 0; RayeCaptureStreamInfo( dup->session, i, &rect, NULL ) == S_OK; i++)
++        TRACE( "stream %u at %s\n", i, wine_dbgstr_rect( &rect ) );
++    /* the output's own monitor handle, or its place when a DXGI hands out other handles */
++    for (i = 0; i < list.count; i++)
++        if (list.handles[i] == dup->monitor)
++            return RayeCaptureFindStream( dup->session, list.rects, list.count, i );
++    for (i = 0; i < list.count; i++)
++        if (EqualRect( &list.rects[i], &dup->desktop ))
++            return RayeCaptureFindStream( dup->session, list.rects, list.count, i );
++    return -1;
++}
++
++/* QueryPerformanceCounter counts CLOCK_MONOTONIC here */
++static LONGLONG qpc_time( INT64 ns )
++{
++    LARGE_INTEGER freq;
++
++    QueryPerformanceFrequency( &freq );
++    return ns / 1000000000 * freq.QuadPart + ns % 1000000000 * freq.QuadPart / 1000000000;
++}
++
++static HRESULT create_texture( struct duplication *dup )
++{
++    D3D11_TEXTURE2D_DESC desc =
++    {
++        .Width = dup->width,
++        .Height = dup->height,
++        .MipLevels = 1,
++        .ArraySize = 1,
++        .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
++        .SampleDesc.Count = 1,
++        .Usage = D3D11_USAGE_DEFAULT,
++        .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
++    };
++
++    return ID3D11Device_CreateTexture2D( dup->device, &desc, NULL, &dup->texture );
++}
++
++/* a screen at another scale than the program thinks: nearest pixel is enough */
++static void scale_image( const BYTE *src, UINT src_width, UINT src_height, BYTE *dst, UINT width, UINT height )
++{
++    UINT x, y;
++
++    for (y = 0; y < height; y++)
++    {
++        const DWORD *row = (const DWORD *)(src + (SIZE_T)(y * src_height / height) * src_width * 4);
++        DWORD *out = (DWORD *)(dst + (SIZE_T)y * width * 4);
++        for (x = 0; x < width; x++) out[x] = row[x * src_width / width];
++    }
++}
++
++static HRESULT upload_image( struct duplication *dup, const struct rayecap_frame *frame )
++{
++    RECT src = { 0, 0, frame->width, frame->height };
++    SIZE_T size = (SIZE_T)frame->width * frame->height * 4;
++    const BYTE *bits;
++    HRESULT hr;
++
++    if (dup->pixels_size < size)
++    {
++        free( dup->pixels );
++        if (!(dup->pixels = malloc( size ))) { dup->pixels_size = 0; return E_OUTOFMEMORY; }
++        dup->pixels_size = size;
++    }
++    if (FAILED(hr = RayeCaptureCopy( dup->session, dup->stream, &src, dup->pixels, frame->width * 4, 0, NULL )))
++        return hr;
++
++    bits = dup->pixels;
++    if (frame->width != dup->width || frame->height != dup->height)
++    {
++        if (!dup->scaled && !(dup->scaled = malloc( (SIZE_T)dup->width * dup->height * 4 ))) return E_OUTOFMEMORY;
++        scale_image( dup->pixels, frame->width, frame->height, dup->scaled, dup->width, dup->height );
++        bits = dup->scaled;
++    }
++    ID3D11DeviceContext_UpdateSubresource( dup->context, (ID3D11Resource *)dup->texture, 0, NULL, bits,
++                                           dup->width * 4, 0 );
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_QueryInterface( IDXGIOutputDuplication *iface, REFIID iid, void **out )
++{
++    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
++
++    if (IsEqualGUID( iid, &IID_IDXGIOutputDuplication ) || IsEqualGUID( iid, &IID_IDXGIObject ) ||
++        IsEqualGUID( iid, &IID_IUnknown ))
++    {
++        IDXGIOutputDuplication_AddRef( iface );
++        *out = iface;
++        return S_OK;
++    }
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG STDMETHODCALLTYPE duplication_AddRef( IDXGIOutputDuplication *iface )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++    return InterlockedIncrement( &dup->refcount );
++}
++
++static ULONG STDMETHODCALLTYPE duplication_Release( IDXGIOutputDuplication *iface )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++    ULONG refcount = InterlockedDecrement( &dup->refcount );
++
++    if (!refcount)
++    {
++        RayeCaptureClose( dup->session );
++        if (dup->texture) ID3D11Texture2D_Release( dup->texture );
++        ID3D11DeviceContext_Release( dup->context );
++        ID3D11Device_Release( dup->device );
++        IDXGIOutput_Release( dup->output );
++        free( dup->pixels );
++        free( dup->scaled );
++        free( dup );
++    }
++    return refcount;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_SetPrivateData( IDXGIOutputDuplication *iface, REFGUID guid,
++                                                             UINT size, const void *data )
++{
++    FIXME( "iface %p, guid %s stub!\n", iface, debugstr_guid( guid ) );
++    return E_NOTIMPL;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_SetPrivateDataInterface( IDXGIOutputDuplication *iface, REFGUID guid,
++                                                                      const IUnknown *object )
++{
++    FIXME( "iface %p, guid %s stub!\n", iface, debugstr_guid( guid ) );
++    return E_NOTIMPL;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_GetPrivateData( IDXGIOutputDuplication *iface, REFGUID guid,
++                                                             UINT *size, void *data )
++{
++    return DXGI_ERROR_NOT_FOUND;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_GetParent( IDXGIOutputDuplication *iface, REFIID iid, void **parent )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++    return IDXGIOutput_QueryInterface( dup->output, iid, parent );
++}
++
++static void STDMETHODCALLTYPE duplication_GetDesc( IDXGIOutputDuplication *iface, DXGI_OUTDUPL_DESC *desc )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++
++    desc->ModeDesc.Width = dup->width;
++    desc->ModeDesc.Height = dup->height;
++    desc->ModeDesc.RefreshRate.Numerator = 60;
++    desc->ModeDesc.RefreshRate.Denominator = 1;
++    desc->ModeDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
++    desc->ModeDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_PROGRESSIVE;
++    desc->ModeDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
++    desc->Rotation = DXGI_MODE_ROTATION_IDENTITY;
++    desc->DesktopImageInSystemMemory = FALSE;
++}
++
++/*
++ * While the picker is open, or for a screen the user did not share, the
++ * program sees a screen with nothing new: the same answer Windows gives a
++ * still desktop, so programs keep their last image and wait.
++ */
++static HRESULT nothing_new( UINT timeout )
++{
++    Sleep( min( timeout, 500 ) );
++    return DXGI_ERROR_WAIT_TIMEOUT;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_AcquireNextFrame( IDXGIOutputDuplication *iface, UINT timeout,
++                                                               DXGI_OUTDUPL_FRAME_INFO *info, IDXGIResource **resource )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++    struct rayecap_frame frame;
++    UINT state;
++    HRESULT hr;
++
++    TRACE( "iface %p, timeout %u, info %p, resource %p.\n", iface, timeout, info, resource );
++
++    if (!info || !resource) return E_INVALIDARG;
++    *resource = NULL;
++    memset( info, 0, sizeof(*info) );
++    if (dup->held) return DXGI_ERROR_INVALID_CALL;
++
++    if ((state = RayeCaptureState( dup->session )) == RAYECAP_STATE_PENDING)
++    {
++        /* returns as soon as the user has picked */
++        RayeCaptureWait( dup->session, -1, 0, -1, timeout, NULL );
++        state = RayeCaptureState( dup->session );
++    }
++    if (state != RAYECAP_STATE_RUNNING) return nothing_new( timeout );
++    if (dup->stream < 0)
++    {
++        dup->stream = find_stream( dup );
++        TRACE( "screen %p is stream %d\n", dup->monitor, dup->stream );
++        if (dup->stream < 0) return nothing_new( timeout );
++    }
++
++    hr = RayeCaptureWait( dup->session, dup->stream, dup->seq, dup->seq ? dup->cursor_ns : -1, timeout, &frame );
++    if (hr == HRESULT_FROM_WIN32( WAIT_TIMEOUT )) return DXGI_ERROR_WAIT_TIMEOUT;
++    if (FAILED(hr)) return nothing_new( timeout );
++
++    if (!dup->texture && FAILED(hr = create_texture( dup ))) return hr;
++
++    dup->new_image = frame.seq > dup->seq;
++    if (dup->new_image)
++    {
++        if (FAILED(hr = upload_image( dup, &frame ))) return hr;
++        info->LastPresentTime.QuadPart = qpc_time( frame.pts_ns );
++        info->AccumulatedFrames = frame.seq - dup->seq;
++        /* the whole screen counts as changed: one dirty rectangle */
++        info->TotalMetadataBufferSize = sizeof(RECT);
++        dup->seq = frame.seq;
++    }
++    if (frame.cursor_ns != dup->cursor_ns)
++    {
++        info->LastMouseUpdateTime.QuadPart = qpc_time( frame.cursor_ns );
++        info->PointerPosition.Visible = frame.cursor_visible;
++        info->PointerPosition.Position.x = (frame.cursor_x - frame.cursor_hot_x) * (LONG)dup->width / max( frame.width, 1 );
++        info->PointerPosition.Position.y = (frame.cursor_y - frame.cursor_hot_y) * (LONG)dup->height / max( frame.height, 1 );
++        dup->cursor_ns = frame.cursor_ns;
++    }
++    if (frame.cursor_visible && frame.cursor_seq != dup->cursor_seq && frame.cursor_width)
++    {
++        info->PointerShapeBufferSize = frame.cursor_width * frame.cursor_height * 4;
++        dup->cursor_seq = frame.cursor_seq;
++    }
++    dup->frame = frame;
++    dup->held = TRUE;
++    return ID3D11Texture2D_QueryInterface( dup->texture, &IID_IDXGIResource, (void **)resource );
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_GetFrameDirtyRects( IDXGIOutputDuplication *iface, UINT size,
++                                                                 RECT *rects, UINT *required )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++
++    if (!dup->held) return DXGI_ERROR_INVALID_CALL;
++    *required = dup->new_image ? sizeof(RECT) : 0;
++    if (size < *required) return DXGI_ERROR_MORE_DATA;
++    if (dup->new_image) SetRect( rects, 0, 0, dup->width, dup->height );
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_GetFrameMoveRects( IDXGIOutputDuplication *iface, UINT size,
++                                                                DXGI_OUTDUPL_MOVE_RECT *rects, UINT *required )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++
++    if (!dup->held) return DXGI_ERROR_INVALID_CALL;
++    *required = 0;
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_GetFramePointerShape( IDXGIOutputDuplication *iface, UINT size,
++        void *buffer, UINT *required, DXGI_OUTDUPL_POINTER_SHAPE_INFO *shape )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++    struct rayecap_frame frame;
++    HRESULT hr;
++
++    TRACE( "iface %p, size %u, buffer %p, required %p, shape %p.\n", iface, size, buffer, required, shape );
++
++    if (!required || !shape || (size && !buffer)) return E_INVALIDARG;
++    if (!dup->held) return DXGI_ERROR_INVALID_CALL;
++    *required = dup->frame.cursor_width * dup->frame.cursor_height * 4;
++    if (!*required) return DXGI_ERROR_NOT_FOUND;
++    if (size < *required) return DXGI_ERROR_MORE_DATA;
++    /* the pitch stays the one the size was given for, even if the pointer just changed */
++    if (FAILED(hr = RayeCaptureCopyCursor( dup->session, dup->stream, buffer, dup->frame.cursor_width * 4,
++                                           dup->frame.cursor_width, size / (dup->frame.cursor_width * 4), &frame )))
++    {
++        if (hr == HRESULT_FROM_WIN32( ERROR_MORE_DATA )) return DXGI_ERROR_MORE_DATA;
++        return DXGI_ERROR_NOT_FOUND;
++    }
++    shape->Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
++    shape->Width = frame.cursor_width;
++    shape->Height = frame.cursor_height;
++    shape->Pitch = dup->frame.cursor_width * 4;
++    shape->HotSpot.x = frame.cursor_hot_x;
++    shape->HotSpot.y = frame.cursor_hot_y;
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_MapDesktopSurface( IDXGIOutputDuplication *iface, DXGI_MAPPED_RECT *rect )
++{
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_UnMapDesktopSurface( IDXGIOutputDuplication *iface )
++{
++    return DXGI_ERROR_UNSUPPORTED;
++}
++
++static HRESULT STDMETHODCALLTYPE duplication_ReleaseFrame( IDXGIOutputDuplication *iface )
++{
++    struct duplication *dup = impl_from_IDXGIOutputDuplication( iface );
++
++    TRACE( "iface %p.\n", iface );
++
++    if (!dup->held) return DXGI_ERROR_INVALID_CALL;
++    dup->held = FALSE;
++    return S_OK;
++}
++
++static const IDXGIOutputDuplicationVtbl duplication_vtbl =
++{
++    duplication_QueryInterface,
++    duplication_AddRef,
++    duplication_Release,
++    duplication_SetPrivateData,
++    duplication_SetPrivateDataInterface,
++    duplication_GetPrivateData,
++    duplication_GetParent,
++    duplication_GetDesc,
++    duplication_AcquireNextFrame,
++    duplication_GetFrameDirtyRects,
++    duplication_GetFrameMoveRects,
++    duplication_GetFramePointerShape,
++    duplication_MapDesktopSurface,
++    duplication_UnMapDesktopSurface,
++    duplication_ReleaseFrame,
++};
++
++HRESULT WINAPI RayeCaptureDuplicateOutput( IDXGIOutput *output, IUnknown *device, UINT format_count,
++                                           const int *formats, IDXGIOutputDuplication **out )
++{
++    struct duplication *dup;
++    DXGI_OUTPUT_DESC desc;
++    ID3D11Device *d3d11;
++    UINT i;
++    HRESULT hr;
++
++    TRACE( "output %p, device %p, format_count %u, formats %p, out %p.\n", output, device, format_count, formats, out );
++
++    if (!out) return E_INVALIDARG;
++    *out = NULL;
++    if (!output || !device) return E_INVALIDARG;
++
++    if (format_count)
++    {
++        for (i = 0; i < format_count; i++)
++            if (formats[i] == DXGI_FORMAT_B8G8R8A8_UNORM) break;
++        if (i == format_count) return DXGI_ERROR_UNSUPPORTED;
++    }
++    if (FAILED(IUnknown_QueryInterface( device, &IID_ID3D11Device, (void **)&d3d11 )))
++    {
++        WARN( "only Direct3D 11 devices can duplicate a screen\n" );
++        return E_INVALIDARG;
++    }
++    if (FAILED(hr = IDXGIOutput_GetDesc( output, &desc ))) goto failed;
++
++    if (!(dup = calloc( 1, sizeof(*dup) ))) { hr = E_OUTOFMEMORY; goto failed; }
++    if (FAILED(hr = RayeCaptureOpen( RAYECAP_KIND_SCREENS, &dup->session )))
++    {
++        free( dup );
++        hr = DXGI_ERROR_UNSUPPORTED;
++        goto failed;
++    }
++    if (RayeCaptureState( dup->session ) == RAYECAP_STATE_DENIED)
++    {
++        /* the user already said no in this run */
++        RayeCaptureClose( dup->session );
++        free( dup );
++        hr = E_ACCESSDENIED;
++        goto failed;
++    }
++    dup->IDXGIOutputDuplication_iface.lpVtbl = &duplication_vtbl;
++    dup->refcount = 1;
++    dup->output = output;
++    IDXGIOutput_AddRef( output );
++    dup->device = d3d11;
++    ID3D11Device_GetImmediateContext( d3d11, &dup->context );
++    dup->monitor = desc.Monitor;
++    dup->desktop = desc.DesktopCoordinates;
++    dup->width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
++    dup->height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
++    dup->stream = -1;
++    dup->cursor_ns = -1;
++
++    TRACE( "duplicating %s as %p\n", wine_dbgstr_rect( &desc.DesktopCoordinates ), dup );
++    *out = &dup->IDXGIOutputDuplication_iface;
++    return S_OK;
++
++failed:
++    ID3D11Device_Release( d3d11 );
++    return hr;
++}
+diff --git a/dlls/rayecap/main.c b/dlls/rayecap/main.c
+new file mode 100644
+index 0000000..74e09a9
+--- /dev/null
++++ b/dlls/rayecap/main.c
+@@ -0,0 +1,167 @@
++/*
++ * rayecap: screen capture for Windows programs.
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <stdarg.h>
++#include <stdlib.h>
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winbase.h"
++#include "winnls.h"
++#include "winternl.h"
++#include "unknwn.h"
++#include "wine/debug.h"
++
++#include "unixlib.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(rayecap);
++
++/* errno values from the unix side */
++#define E_UNIX_EACCES     13
++#define E_UNIX_EAGAIN     11
++#define E_UNIX_EPIPE      32
++#define E_UNIX_ENOENT     2
++#define E_UNIX_ENOSPC     28
++#define E_UNIX_ETIMEDOUT  110
++
++static HRESULT hresult( int result )
++{
++    switch (-result)
++    {
++    case 0: return S_OK;
++    case E_UNIX_ETIMEDOUT:
++    case E_UNIX_EAGAIN: return HRESULT_FROM_WIN32( WAIT_TIMEOUT );
++    case E_UNIX_EACCES: return E_ACCESSDENIED;
++    case E_UNIX_EPIPE: return HRESULT_FROM_WIN32( ERROR_BROKEN_PIPE );
++    case E_UNIX_ENOSPC: return HRESULT_FROM_WIN32( ERROR_MORE_DATA );
++    case E_UNIX_ENOENT: return HRESULT_FROM_WIN32( ERROR_NOT_FOUND );
++    default: return E_FAIL;
++    }
++}
++
++static UINT64 handle( HRAYECAP session )
++{
++    return (ULONG_PTR)session;
++}
++
++/* the program's own path names it for the remembered choice */
++static char *utf8( const WCHAR *str )
++{
++    int len = WideCharToMultiByte( CP_UTF8, 0, str, -1, NULL, 0, NULL, NULL );
++    char *ret = malloc( len );
++    if (ret) WideCharToMultiByte( CP_UTF8, 0, str, -1, ret, len, NULL, NULL );
++    return ret;
++}
++
++HRESULT WINAPI RayeCaptureOpen( UINT kind, HRAYECAP *session )
++{
++    struct open_params params = { .kind = kind };
++    WCHAR path[MAX_PATH], *name;
++    NTSTATUS status;
++
++    if (!GetModuleFileNameW( NULL, path, ARRAY_SIZE(path) )) path[0] = 0;
++    name = wcsrchr( path, '\\' );
++    params.app_key = utf8( path );
++    params.app_name = utf8( name ? name + 1 : path );
++
++    TRACE( "kind %u for %s\n", kind, debugstr_w( path ) );
++    status = WINE_UNIX_CALL( unix_open, &params );
++    free( (char *)params.app_key );
++    free( (char *)params.app_name );
++    if (status) return status == STATUS_NOT_SUPPORTED ? HRESULT_FROM_WIN32( ERROR_NOT_SUPPORTED ) : E_FAIL;
++    *session = (HRAYECAP)(ULONG_PTR)params.handle;
++    return S_OK;
++}
++
++void WINAPI RayeCaptureClose( HRAYECAP session )
++{
++    struct handle_params params = { .handle = handle( session ) };
++    if (session) WINE_UNIX_CALL( unix_close, &params );
++}
++
++UINT WINAPI RayeCaptureState( HRAYECAP session )
++{
++    struct handle_params params = { .handle = handle( session ) };
++    WINE_UNIX_CALL( unix_state, &params );
++    return params.state;
++}
++
++int WINAPI RayeCaptureFindStream( HRAYECAP session, const RECT *monitors, UINT count, UINT monitor )
++{
++    struct find_params params = { .handle = handle( session ), .monitors = monitors, .count = count,
++                                  .monitor = monitor };
++    WINE_UNIX_CALL( unix_find, &params );
++    return params.stream;
++}
++
++HRESULT WINAPI RayeCaptureStreamInfo( HRAYECAP session, int stream, RECT *rect, UINT *source )
++{
++    struct stream_params params = { .handle = handle( session ), .stream = stream };
++
++    WINE_UNIX_CALL( unix_stream_info, &params );
++    if (params.result) return E_INVALIDARG;
++    if (rect) *rect = params.rect;
++    if (source) *source = params.source;
++    return S_OK;
++}
++
++HRESULT WINAPI RayeCaptureWait( HRAYECAP session, int stream, UINT64 after_seq, INT64 after_cursor_ns,
++                                UINT timeout, struct rayecap_frame *frame )
++{
++    struct wait_params params = { .handle = handle( session ), .stream = stream, .after_seq = after_seq,
++                                  .after_cursor_ns = after_cursor_ns, .timeout = timeout };
++
++    WINE_UNIX_CALL( unix_wait, &params );
++    if (frame) *frame = params.frame;
++    return hresult( params.result );
++}
++
++HRESULT WINAPI RayeCaptureCopy( HRAYECAP session, int stream, const RECT *src, void *dst, UINT pitch,
++                                UINT flags, struct rayecap_frame *frame )
++{
++    struct copy_params params = { .handle = handle( session ), .stream = stream, .src = *src, .dst = dst,
++                                  .pitch = pitch, .flags = flags };
++
++    WINE_UNIX_CALL( unix_copy, &params );
++    if (frame) *frame = params.frame;
++    return hresult( params.result );
++}
++
++HRESULT WINAPI RayeCaptureCopyCursor( HRAYECAP session, int stream, void *dst, UINT pitch,
++                                      UINT max_width, UINT max_height, struct rayecap_frame *frame )
++{
++    struct cursor_params params = { .handle = handle( session ), .stream = stream, .dst = dst, .pitch = pitch,
++                                    .max_width = max_width, .max_height = max_height };
++
++    WINE_UNIX_CALL( unix_copy_cursor, &params );
++    if (frame) *frame = params.frame;
++    return hresult( params.result );
++}
++
++BOOL WINAPI DllMain( HINSTANCE instance, DWORD reason, void *reserved )
++{
++    if (reason == DLL_PROCESS_ATTACH)
++    {
++        DisableThreadLibraryCalls( instance );
++        if (__wine_init_unix_call()) return FALSE;
++    }
++    return TRUE;
++}
+diff --git a/dlls/rayecap/rayecap.spec b/dlls/rayecap/rayecap.spec
+new file mode 100644
+index 0000000..ff6e3bb
+--- /dev/null
++++ b/dlls/rayecap/rayecap.spec
+@@ -0,0 +1,9 @@
++@ stdcall RayeCaptureOpen(long ptr)
++@ stdcall RayeCaptureClose(ptr)
++@ stdcall RayeCaptureState(ptr)
++@ stdcall RayeCaptureFindStream(ptr ptr long long)
++@ stdcall RayeCaptureStreamInfo(ptr long ptr ptr)
++@ stdcall RayeCaptureWait(ptr long int64 int64 long ptr)
++@ stdcall RayeCaptureCopy(ptr long ptr ptr long long ptr)
++@ stdcall RayeCaptureCopyCursor(ptr long ptr long long long ptr)
++@ stdcall RayeCaptureDuplicateOutput(ptr ptr long ptr ptr)
+diff --git a/dlls/rayecap/unixlib.c b/dlls/rayecap/unixlib.c
+new file mode 100644
+index 0000000..754a845
+--- /dev/null
++++ b/dlls/rayecap/unixlib.c
+@@ -0,0 +1,184 @@
++/*
++ * Unix side of rayecap: hands calls over to libraye-capture.
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include <dlfcn.h>
++#include <errno.h>
++#include <limits.h>
++#include <pthread.h>
++#include <stdarg.h>
++#include <stdint.h>
++
++#include "ntstatus.h"
++#include "windef.h"
++#include "winternl.h"
++#include "wine/debug.h"
++
++#include "unixlib.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(rayecap);
++
++/* from raye-capture.h, kept here so Wine builds without it */
++struct rcap_rect { int x, y, width, height; };
++struct rcap_stream_info { struct rcap_rect rect; unsigned int source; uint32_t node_id; };
++
++static int (*p_open)( int kind, const char *app_key, const char *app_name, void **session );
++static void (*p_unref)( void *session );
++static int (*p_state)( void *session );
++static int (*p_stream_info)( void *session, int index, struct rcap_stream_info *info );
++static int (*p_find_stream)( void *session, const struct rcap_rect *monitors, int count, int monitor );
++static int (*p_wait)( void *session, int index, uint64_t after_seq, int64_t after_cursor_ns, int timeout,
++                      struct rayecap_frame *info );
++static int (*p_copy)( void *session, int index, const struct rcap_rect *src, void *dst, int stride,
++                      unsigned int flags, struct rayecap_frame *info );
++static int (*p_copy_cursor)( void *session, int index, void *dst, int stride, int max_width, int max_height,
++                             struct rayecap_frame *info );
++
++static pthread_once_t load_once = PTHREAD_ONCE_INIT;
++static void *library;
++
++static void load_library(void)
++{
++    if (!(library = dlopen( "libraye-capture.so.1", RTLD_NOW )))
++    {
++        WARN( "screen capture is not available: %s\n", dlerror() );
++        return;
++    }
++#define LOAD(f, name) if (!(f = dlsym( library, name ))) { WARN( "%s missing\n", name ); dlclose( library ); library = NULL; return; }
++    LOAD( p_open, "rcap_session_open" )
++    LOAD( p_unref, "rcap_session_unref" )
++    LOAD( p_state, "rcap_session_state" )
++    LOAD( p_stream_info, "rcap_session_stream_info" )
++    LOAD( p_find_stream, "rcap_session_find_stream" )
++    LOAD( p_wait, "rcap_wait_frame" )
++    LOAD( p_copy, "rcap_copy_frame" )
++    LOAD( p_copy_cursor, "rcap_copy_cursor" )
++#undef LOAD
++}
++
++static void *session( UINT64 handle )
++{
++    return (void *)(ULONG_PTR)handle;
++}
++
++static NTSTATUS rayecap_open( void *args )
++{
++    struct open_params *params = args;
++    void *s;
++
++    pthread_once( &load_once, load_library );
++    if (!library) return STATUS_NOT_SUPPORTED;
++    if (p_open( params->kind, params->app_key, params->app_name, &s )) return STATUS_UNSUCCESSFUL;
++    params->handle = (ULONG_PTR)s;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_close( void *args )
++{
++    struct handle_params *params = args;
++    p_unref( session( params->handle ) );
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_state( void *args )
++{
++    struct handle_params *params = args;
++    params->state = p_state( session( params->handle ) );
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_find( void *args )
++{
++    struct find_params *params = args;
++    struct rcap_rect rects[64];
++    UINT i, count = min( params->count, ARRAY_SIZE(rects) );
++
++    for (i = 0; i < count; i++)
++    {
++        rects[i].x = params->monitors[i].left;
++        rects[i].y = params->monitors[i].top;
++        rects[i].width = params->monitors[i].right - params->monitors[i].left;
++        rects[i].height = params->monitors[i].bottom - params->monitors[i].top;
++    }
++    params->stream = p_find_stream( session( params->handle ), rects, count, params->monitor );
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_stream_info( void *args )
++{
++    struct stream_params *params = args;
++    struct rcap_stream_info info;
++
++    if ((params->result = p_stream_info( session( params->handle ), params->stream, &info ))) return STATUS_SUCCESS;
++    params->rect.left = info.rect.x;
++    params->rect.top = info.rect.y;
++    params->rect.right = info.rect.x + info.rect.width;
++    params->rect.bottom = info.rect.y + info.rect.height;
++    params->source = info.source;
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_wait( void *args )
++{
++    struct wait_params *params = args;
++
++    /* INFINITE and other huge waits mean no limit */
++    params->result = p_wait( session( params->handle ), params->stream, params->after_seq,
++                             params->after_cursor_ns, params->timeout > INT_MAX ? -1 : (int)params->timeout,
++                             &params->frame );
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_copy( void *args )
++{
++    struct copy_params *params = args;
++    struct rcap_rect src = { params->src.left, params->src.top, params->src.right - params->src.left,
++                             params->src.bottom - params->src.top };
++
++    params->result = p_copy( session( params->handle ), params->stream, &src, params->dst, params->pitch,
++                             params->flags, &params->frame );
++    return STATUS_SUCCESS;
++}
++
++static NTSTATUS rayecap_copy_cursor( void *args )
++{
++    struct cursor_params *params = args;
++
++    params->result = p_copy_cursor( session( params->handle ), params->stream, params->dst, params->pitch,
++                                    params->max_width, params->max_height, &params->frame );
++    return STATUS_SUCCESS;
++}
++
++const unixlib_entry_t __wine_unix_call_funcs[] =
++{
++    rayecap_open,
++    rayecap_close,
++    rayecap_state,
++    rayecap_find,
++    rayecap_stream_info,
++    rayecap_wait,
++    rayecap_copy,
++    rayecap_copy_cursor,
++};
++
++C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
+diff --git a/dlls/rayecap/unixlib.h b/dlls/rayecap/unixlib.h
+new file mode 100644
+index 0000000..5d56c88
+--- /dev/null
++++ b/dlls/rayecap/unixlib.h
+@@ -0,0 +1,105 @@
++/*
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __RAYECAP_UNIXLIB_H
++#define __RAYECAP_UNIXLIB_H
++
++#include "wine/unixlib.h"
++#include "rayecap.h"
++
++struct open_params
++{
++    UINT kind;
++    const char *app_key;
++    const char *app_name;
++    UINT64 handle;
++};
++
++struct handle_params
++{
++    UINT64 handle;
++    UINT state;
++};
++
++struct find_params
++{
++    UINT64 handle;
++    const RECT *monitors;
++    UINT count;
++    UINT monitor;
++    int stream;
++};
++
++struct stream_params
++{
++    UINT64 handle;
++    int stream;
++    RECT rect;
++    UINT source;
++    int result;
++};
++
++struct wait_params
++{
++    UINT64 handle;
++    int stream;
++    UINT64 after_seq;
++    INT64 after_cursor_ns;
++    UINT timeout;
++    struct rayecap_frame frame;
++    int result;
++};
++
++struct copy_params
++{
++    UINT64 handle;
++    int stream;
++    RECT src;
++    void *dst;
++    UINT pitch;
++    UINT flags;
++    struct rayecap_frame frame;
++    int result;
++};
++
++struct cursor_params
++{
++    UINT64 handle;
++    int stream;
++    void *dst;
++    UINT pitch;
++    UINT max_width;
++    UINT max_height;
++    struct rayecap_frame frame;
++    int result;
++};
++
++enum rayecap_funcs
++{
++    unix_open,
++    unix_close,
++    unix_state,
++    unix_find,
++    unix_stream_info,
++    unix_wait,
++    unix_copy,
++    unix_copy_cursor,
++    unix_funcs_count,
++};
++
++#endif
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 3f23c63..f081500 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -826,6 +826,7 @@ SOURCES = \
+ 	ras.h \
+ 	rasdlg.h \
+ 	raserror.h \
++	rayecap.h \
+ 	realtimeapiset.h \
+ 	reason.h \
+ 	regstr.h \
+diff --git a/include/rayecap.h b/include/rayecap.h
+new file mode 100644
+index 0000000..1546ed3
+--- /dev/null
++++ b/include/rayecap.h
+@@ -0,0 +1,75 @@
++/*
++ * Screen capture for Windows programs, answered with the desktop's screens
++ * and windows through the system share picker.
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __RAYECAP_H
++#define __RAYECAP_H
++
++#define RAYECAP_KIND_SCREENS 1
++#define RAYECAP_KIND_PICK    2
++
++#define RAYECAP_STATE_PENDING 0
++#define RAYECAP_STATE_RUNNING 1
++#define RAYECAP_STATE_DENIED  2
++#define RAYECAP_STATE_CLOSED  3
++
++#define RAYECAP_COPY_CURSOR 0x1
++
++/* same layout as struct rcap_frame_info */
++struct rayecap_frame
++{
++    int width, height;
++    UINT64 seq;
++    INT64 pts_ns;
++    INT64 arrival_ns;
++    int cursor_visible;
++    int cursor_x, cursor_y;
++    int cursor_hot_x, cursor_hot_y;
++    int cursor_width, cursor_height;
++    UINT64 cursor_seq;
++    INT64 cursor_ns;
++};
++
++#ifndef WINE_UNIX_LIB
++
++typedef struct rayecap_session *HRAYECAP;
++
++HRESULT WINAPI RayeCaptureOpen( UINT kind, HRAYECAP *session );
++void    WINAPI RayeCaptureClose( HRAYECAP session );
++UINT    WINAPI RayeCaptureState( HRAYECAP session );
++int     WINAPI RayeCaptureFindStream( HRAYECAP session, const RECT *monitors, UINT count, UINT monitor );
++HRESULT WINAPI RayeCaptureStreamInfo( HRAYECAP session, int stream, RECT *rect, UINT *source );
++HRESULT WINAPI RayeCaptureWait( HRAYECAP session, int stream, UINT64 after_seq, INT64 after_cursor_ns,
++                                UINT timeout, struct rayecap_frame *frame );
++HRESULT WINAPI RayeCaptureCopy( HRAYECAP session, int stream, const RECT *src, void *dst, UINT pitch,
++                                UINT flags, struct rayecap_frame *frame );
++HRESULT WINAPI RayeCaptureCopyCursor( HRAYECAP session, int stream, void *dst, UINT pitch,
++                                      UINT max_width, UINT max_height, struct rayecap_frame *frame );
++
++/* what IDXGIOutput1::DuplicateOutput and DuplicateOutput1 answer, for any DXGI */
++struct IDXGIOutput;
++struct IDXGIOutputDuplication;
++HRESULT WINAPI RayeCaptureDuplicateOutput( struct IDXGIOutput *output, IUnknown *device,
++                                           UINT format_count, const int *formats,
++                                           struct IDXGIOutputDuplication **duplication );
++
++#endif /* WINE_UNIX_LIB */
++
++#endif

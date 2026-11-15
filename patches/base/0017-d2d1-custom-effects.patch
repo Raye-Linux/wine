@@ -1,0 +1,357 @@
+Subject: d2d1: custom effects with their own interface pointers, colour contexts
+
+An effect's factory returns IUnknown; Direct2D asks it for
+ID2D1EffectImpl, the release used it as one. An implementation with a
+separate interface pointer per interface (Paint.NET's) then had
+Initialize called through its IUnknown table: its installer died while
+it checked the graphics card. CreateColorContext and
+CreateColorContextFromDxgiColorSpace return a context instead of
+E_NOTIMPL (sRGB, scRGB, or a custom profile kept as given; nothing
+converts colours yet). The effect context answers ID2D1EffectContext1
+and 2, and hands out its device context, as Paint.NET's effects expect.
+tests/samples/d2d1-effect.c checks all of it.
+---
+diff --git a/dlls/d2d1/d2d1_private.h b/dlls/d2d1/d2d1_private.h
+index ba6cea7..7381eaa 100644
+--- a/dlls/d2d1/d2d1_private.h
++++ b/dlls/d2d1/d2d1_private.h
+@@ -703,6 +703,8 @@ struct d2d_effect_context
+ 
+ void d2d_effect_context_init(struct d2d_effect_context *effect_context,
+         struct d2d_device_context *device_context);
++HRESULT d2d_color_context_create(ID2D1Factory *factory, D2D1_COLOR_CONTEXT_TYPE type, D2D1_COLOR_SPACE space,
++        DXGI_COLOR_SPACE_TYPE dxgi, const BYTE *profile, UINT32 profile_size, ID2D1ColorContext1 **color_context);
+ 
+ struct d2d_effect_property
+ {
+diff --git a/dlls/d2d1/device.c b/dlls/d2d1/device.c
+index 552d6d4..abd4a6a 100644
+--- a/dlls/d2d1/device.c
++++ b/dlls/d2d1/device.c
+@@ -2199,13 +2199,156 @@ static HRESULT STDMETHODCALLTYPE d2d_device_context_ID2D1DeviceContext_CreateBit
+     return hr;
+ }
+ 
++struct d2d_color_context
++{
++    ID2D1ColorContext1 ID2D1ColorContext1_iface;
++    LONG refcount;
++    ID2D1Factory *factory;
++    D2D1_COLOR_CONTEXT_TYPE type;
++    D2D1_COLOR_SPACE space;
++    DXGI_COLOR_SPACE_TYPE dxgi;
++    UINT32 profile_size;
++    BYTE profile[];
++};
++
++static inline struct d2d_color_context *impl_from_ID2D1ColorContext1(ID2D1ColorContext1 *iface)
++{
++    return CONTAINING_RECORD(iface, struct d2d_color_context, ID2D1ColorContext1_iface);
++}
++
++static HRESULT STDMETHODCALLTYPE d2d_color_context_QueryInterface(ID2D1ColorContext1 *iface,
++        REFIID iid, void **out)
++{
++    TRACE("iface %p, iid %s, out %p.\n", iface, debugstr_guid(iid), out);
++
++    if (IsEqualGUID(iid, &IID_ID2D1ColorContext1)
++            || IsEqualGUID(iid, &IID_ID2D1ColorContext)
++            || IsEqualGUID(iid, &IID_ID2D1Resource)
++            || IsEqualGUID(iid, &IID_IUnknown))
++    {
++        ID2D1ColorContext1_AddRef(iface);
++        *out = iface;
++        return S_OK;
++    }
++
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG STDMETHODCALLTYPE d2d_color_context_AddRef(ID2D1ColorContext1 *iface)
++{
++    struct d2d_color_context *context = impl_from_ID2D1ColorContext1(iface);
++    return InterlockedIncrement(&context->refcount);
++}
++
++static ULONG STDMETHODCALLTYPE d2d_color_context_Release(ID2D1ColorContext1 *iface)
++{
++    struct d2d_color_context *context = impl_from_ID2D1ColorContext1(iface);
++    ULONG refcount = InterlockedDecrement(&context->refcount);
++
++    if (!refcount)
++    {
++        ID2D1Factory_Release(context->factory);
++        free(context);
++    }
++    return refcount;
++}
++
++static void STDMETHODCALLTYPE d2d_color_context_GetFactory(ID2D1ColorContext1 *iface, ID2D1Factory **factory)
++{
++    struct d2d_color_context *context = impl_from_ID2D1ColorContext1(iface);
++
++    ID2D1Factory_AddRef(*factory = context->factory);
++}
++
++static D2D1_COLOR_SPACE STDMETHODCALLTYPE d2d_color_context_GetColorSpace(ID2D1ColorContext1 *iface)
++{
++    return impl_from_ID2D1ColorContext1(iface)->space;
++}
++
++static UINT32 STDMETHODCALLTYPE d2d_color_context_GetProfileSize(ID2D1ColorContext1 *iface)
++{
++    return impl_from_ID2D1ColorContext1(iface)->profile_size;
++}
++
++static HRESULT STDMETHODCALLTYPE d2d_color_context_GetProfile(ID2D1ColorContext1 *iface, BYTE *profile, UINT32 size)
++{
++    struct d2d_color_context *context = impl_from_ID2D1ColorContext1(iface);
++
++    if (size < context->profile_size)
++        return D2DERR_INSUFFICIENT_BUFFER;
++    memcpy(profile, context->profile, context->profile_size);
++    return S_OK;
++}
++
++static D2D1_COLOR_CONTEXT_TYPE STDMETHODCALLTYPE d2d_color_context_GetColorContextType(ID2D1ColorContext1 *iface)
++{
++    return impl_from_ID2D1ColorContext1(iface)->type;
++}
++
++static DXGI_COLOR_SPACE_TYPE STDMETHODCALLTYPE d2d_color_context_GetDXGIColorSpace(ID2D1ColorContext1 *iface)
++{
++    return impl_from_ID2D1ColorContext1(iface)->dxgi;
++}
++
++static HRESULT STDMETHODCALLTYPE d2d_color_context_GetSimpleColorProfile(ID2D1ColorContext1 *iface,
++        D2D1_SIMPLE_COLOR_PROFILE *simple_profile)
++{
++    return D2DERR_INVALID_PROPERTY;
++}
++
++static const struct ID2D1ColorContext1Vtbl d2d_color_context_vtbl =
++{
++    d2d_color_context_QueryInterface,
++    d2d_color_context_AddRef,
++    d2d_color_context_Release,
++    d2d_color_context_GetFactory,
++    d2d_color_context_GetColorSpace,
++    d2d_color_context_GetProfileSize,
++    d2d_color_context_GetProfile,
++    d2d_color_context_GetColorContextType,
++    d2d_color_context_GetDXGIColorSpace,
++    d2d_color_context_GetSimpleColorProfile,
++};
++
++HRESULT d2d_color_context_create(ID2D1Factory *factory, D2D1_COLOR_CONTEXT_TYPE type, D2D1_COLOR_SPACE space,
++        DXGI_COLOR_SPACE_TYPE dxgi, const BYTE *profile, UINT32 profile_size, ID2D1ColorContext1 **color_context)
++{
++    struct d2d_color_context *object;
++
++    if (!(object = calloc(1, offsetof(struct d2d_color_context, profile[profile_size]))))
++        return E_OUTOFMEMORY;
++    object->ID2D1ColorContext1_iface.lpVtbl = &d2d_color_context_vtbl;
++    object->refcount = 1;
++    ID2D1Factory_AddRef(object->factory = factory);
++    object->type = type;
++    object->space = space;
++    object->dxgi = dxgi;
++    object->profile_size = profile_size;
++    if (profile_size)
++        memcpy(object->profile, profile, profile_size);
++    *color_context = &object->ID2D1ColorContext1_iface;
++    return S_OK;
++}
++
++/* sRGB and scRGB need no profile; nothing converts colours yet, the
++ * context only says which space the program asked for. */
+ static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateColorContext(ID2D1DeviceContext6 *iface,
+         D2D1_COLOR_SPACE space, const BYTE *profile, UINT32 profile_size, ID2D1ColorContext **color_context)
+ {
+-    FIXME("iface %p, space %#x, profile %p, profile_size %u, color_context %p stub!\n",
++    struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
++
++    TRACE("iface %p, space %#x, profile %p, profile_size %u, color_context %p.\n",
+             iface, space, profile, profile_size, color_context);
+ 
+-    return E_NOTIMPL;
++    if (space != D2D1_COLOR_SPACE_CUSTOM && space != D2D1_COLOR_SPACE_SRGB && space != D2D1_COLOR_SPACE_SCRGB)
++        return E_INVALIDARG;
++    if (space == D2D1_COLOR_SPACE_CUSTOM ? !profile || !profile_size : !!profile)
++        return E_INVALIDARG;
++    return d2d_color_context_create(context->factory, D2D1_COLOR_CONTEXT_TYPE_ICC, space,
++            space == D2D1_COLOR_SPACE_SCRGB ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
++            : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, profile, space == D2D1_COLOR_SPACE_CUSTOM ? profile_size : 0,
++            (ID2D1ColorContext1 **)color_context);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateColorContextFromFilename(ID2D1DeviceContext6 *iface,
+@@ -3177,9 +3320,13 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawSvgDocument(ID2D1DeviceCont
+ static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateColorContextFromDxgiColorSpace(
+         ID2D1DeviceContext6 *iface, DXGI_COLOR_SPACE_TYPE color_space, ID2D1ColorContext1 **color_context)
+ {
+-    FIXME("iface %p, color_space %u, color_context %p stub!\n", iface, color_space, color_context);
++    struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
+ 
+-    return E_NOTIMPL;
++    TRACE("iface %p, color_space %u, color_context %p.\n", iface, color_space, color_context);
++
++    return d2d_color_context_create(context->factory, D2D1_COLOR_CONTEXT_TYPE_DXGI,
++            color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ? D2D1_COLOR_SPACE_SCRGB : D2D1_COLOR_SPACE_SRGB,
++            color_space, NULL, 0, color_context);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d2d_device_context_CreateColorContextFromSimpleColorProfile(
+diff --git a/dlls/d2d1/effect.c b/dlls/d2d1/effect.c
+index 512b6b0..2b4bd17 100644
+--- a/dlls/d2d1/effect.c
++++ b/dlls/d2d1/effect.c
+@@ -2355,11 +2355,31 @@ static inline struct d2d_effect_context *impl_from_ID2D1EffectContext(ID2D1Effec
+     return CONTAINING_RECORD(iface, struct d2d_effect_context, ID2D1EffectContext_iface);
+ }
+ 
++/* ID2D1EffectContext1 and 2 add three methods after those of
++ * ID2D1EffectContext, which the headers do not describe yet. */
++static const GUID IID_ID2D1EffectContext1_raye =
++        {0x84ab595a, 0xfc81, 0x4546, {0xba, 0xcd, 0xe8, 0xef, 0x4d, 0x8a, 0xbe, 0x7a}};
++static const GUID IID_ID2D1EffectContext2_raye =
++        {0x577ad2a0, 0x9fc7, 0x4dda, {0x8b, 0x18, 0xda, 0xb8, 0x10, 0x14, 0x00, 0x52}};
++
++struct d2d_effect_context2_vtbl
++{
++    ID2D1EffectContextVtbl base;
++    HRESULT (STDMETHODCALLTYPE *CreateLookupTable3D)(ID2D1EffectContext *iface, D2D1_BUFFER_PRECISION precision,
++            const UINT32 *extents, const BYTE *data, UINT32 data_count, const UINT32 *strides, void **table);
++    HRESULT (STDMETHODCALLTYPE *CreateColorContextFromDxgiColorSpace)(ID2D1EffectContext *iface,
++            DXGI_COLOR_SPACE_TYPE color_space, ID2D1ColorContext1 **color_context);
++    HRESULT (STDMETHODCALLTYPE *CreateColorContextFromSimpleColorProfile)(ID2D1EffectContext *iface,
++            const D2D1_SIMPLE_COLOR_PROFILE *simple_profile, ID2D1ColorContext1 **color_context);
++};
++
+ static HRESULT STDMETHODCALLTYPE d2d_effect_context_QueryInterface(ID2D1EffectContext *iface, REFIID iid, void **out)
+ {
+     TRACE("iface %p, iid %s, out %p.\n", iface, debugstr_guid(iid), out);
+ 
+     if (IsEqualGUID(iid, &IID_ID2D1EffectContext)
++            || IsEqualGUID(iid, &IID_ID2D1EffectContext1_raye)
++            || IsEqualGUID(iid, &IID_ID2D1EffectContext2_raye)
+             || IsEqualGUID(iid, &IID_IUnknown))
+     {
+         ID2D1EffectContext_AddRef(iface);
+@@ -2367,6 +2387,21 @@ static HRESULT STDMETHODCALLTYPE d2d_effect_context_QueryInterface(ID2D1EffectCo
+         return S_OK;
+     }
+ 
++    /* Custom effects reach the device context this way on Windows. */
++    if (IsEqualGUID(iid, &IID_ID2D1DeviceContext)
++            || IsEqualGUID(iid, &IID_ID2D1DeviceContext1)
++            || IsEqualGUID(iid, &IID_ID2D1DeviceContext2)
++            || IsEqualGUID(iid, &IID_ID2D1DeviceContext3)
++            || IsEqualGUID(iid, &IID_ID2D1DeviceContext4)
++            || IsEqualGUID(iid, &IID_ID2D1DeviceContext5)
++            || IsEqualGUID(iid, &IID_ID2D1DeviceContext6))
++    {
++        struct d2d_effect_context *effect_context = impl_from_ID2D1EffectContext(iface);
++
++        return ID2D1DeviceContext6_QueryInterface(&effect_context->device_context->ID2D1DeviceContext6_iface,
++                iid, out);
++    }
++
+     WARN("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid));
+ 
+     *out = NULL;
+@@ -2684,8 +2719,41 @@ static BOOL STDMETHODCALLTYPE d2d_effect_context_IsBufferPrecisionSupported(ID2D
+             precision);
+ }
+ 
+-static const ID2D1EffectContextVtbl d2d_effect_context_vtbl =
++static HRESULT STDMETHODCALLTYPE d2d_effect_context_CreateLookupTable3D(ID2D1EffectContext *iface,
++        D2D1_BUFFER_PRECISION precision, const UINT32 *extents, const BYTE *data, UINT32 data_count,
++        const UINT32 *strides, void **table)
++{
++    FIXME("iface %p, precision %u, extents %p, data %p, data_count %u, strides %p, table %p stub!\n",
++            iface, precision, extents, data, data_count, strides, table);
++
++    return E_NOTIMPL;
++}
++
++static HRESULT STDMETHODCALLTYPE d2d_effect_context_CreateColorContextFromDxgiColorSpace(ID2D1EffectContext *iface,
++        DXGI_COLOR_SPACE_TYPE color_space, ID2D1ColorContext1 **color_context)
++{
++    struct d2d_effect_context *effect_context = impl_from_ID2D1EffectContext(iface);
++
++    TRACE("iface %p, color_space %u, color_context %p.\n", iface, color_space, color_context);
++
++    return ID2D1DeviceContext6_CreateColorContextFromDxgiColorSpace(
++            &effect_context->device_context->ID2D1DeviceContext6_iface, color_space, color_context);
++}
++
++static HRESULT STDMETHODCALLTYPE d2d_effect_context_CreateColorContextFromSimpleColorProfile(
++        ID2D1EffectContext *iface, const D2D1_SIMPLE_COLOR_PROFILE *simple_profile, ID2D1ColorContext1 **color_context)
++{
++    struct d2d_effect_context *effect_context = impl_from_ID2D1EffectContext(iface);
++
++    TRACE("iface %p, simple_profile %p, color_context %p.\n", iface, simple_profile, color_context);
++
++    return ID2D1DeviceContext6_CreateColorContextFromSimpleColorProfile(
++            &effect_context->device_context->ID2D1DeviceContext6_iface, simple_profile, color_context);
++}
++
++static const struct d2d_effect_context2_vtbl d2d_effect_context_vtbl =
+ {
++    {
+     d2d_effect_context_QueryInterface,
+     d2d_effect_context_AddRef,
+     d2d_effect_context_Release,
+@@ -2710,11 +2778,15 @@ static const ID2D1EffectContextVtbl d2d_effect_context_vtbl =
+     d2d_effect_context_CreateColorContextFromWicColorContext,
+     d2d_effect_context_CheckFeatureSupport,
+     d2d_effect_context_IsBufferPrecisionSupported,
++    },
++    d2d_effect_context_CreateLookupTable3D,
++    d2d_effect_context_CreateColorContextFromDxgiColorSpace,
++    d2d_effect_context_CreateColorContextFromSimpleColorProfile,
+ };
+ 
+ void d2d_effect_context_init(struct d2d_effect_context *effect_context, struct d2d_device_context *device_context)
+ {
+-    effect_context->ID2D1EffectContext_iface.lpVtbl = &d2d_effect_context_vtbl;
++    effect_context->ID2D1EffectContext_iface.lpVtbl = &d2d_effect_context_vtbl.base;
+     effect_context->refcount = 1;
+     effect_context->device_context = device_context;
+     ID2D1DeviceContext6_AddRef(&device_context->ID2D1DeviceContext6_iface);
+@@ -3539,6 +3611,7 @@ HRESULT d2d_effect_create(struct d2d_device_context *context, const CLSID *effec
+     struct d2d_effect *object;
+     UINT32 input_count;
+     WCHAR clsidW[39];
++    IUnknown *unk;
+     HRESULT hr;
+ 
+     if (!(reg = d2d_factory_get_registered_effect(context->factory, effect_id)))
+@@ -3580,13 +3653,24 @@ HRESULT d2d_effect_create(struct d2d_device_context *context, const CLSID *effec
+         return hr;
+     }
+ 
+-    if (FAILED(hr = reg->factory((IUnknown **)&object->impl)))
++    if (FAILED(hr = reg->factory(&unk)))
+     {
+         WARN("Failed to create implementation object, hr %#lx.\n", hr);
+         ID2D1Effect_Release(&object->ID2D1Effect_iface);
+         return hr;
+     }
+ 
++    /* The factory hands back IUnknown; for an implementation written
++     * with separate interface pointers it is not the ID2D1EffectImpl. */
++    hr = IUnknown_QueryInterface(unk, &IID_ID2D1EffectImpl, (void **)&object->impl);
++    IUnknown_Release(unk);
++    if (FAILED(hr))
++    {
++        WARN("Implementation object has no ID2D1EffectImpl, hr %#lx.\n", hr);
++        ID2D1Effect_Release(&object->ID2D1Effect_iface);
++        return hr;
++    }
++
+     if (FAILED(hr = ID2D1EffectImpl_Initialize(object->impl, &effect_context->ID2D1EffectContext_iface,
+             &object->graph->ID2D1TransformGraph_iface)))
+     {

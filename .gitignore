@@ -1,0 +1,5 @@
+work/
+out/
+third-party/cache/
+__pycache__/
+build/

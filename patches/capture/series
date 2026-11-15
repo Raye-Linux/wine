@@ -1,0 +1,4 @@
+# Applied in this order by build.sh, after base/ and audio/, one file name per line.
+0001-rayecap-screen-capture-for-windows-programs.patch
+0002-dxgi-duplicate-outputs-through-rayecap.patch
+0003-win32u-read-the-screen-from-the-desktop-share.patch

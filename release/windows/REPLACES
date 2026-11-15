@@ -1,0 +1,14 @@
+# Files here that carry the same name as one in
+# raye-base/release/windows, and therefore supersede it rather than sit
+# beside it. Both end up in /usr/share/raye/windows-profiles, where the
+# runner takes the FIRST pattern that matches in file-name order: two
+# files of the same name are not two profiles, they are one, and which
+# one you get depends on which package was unpacked last. That is not a
+# thing to discover in production.
+#
+#   path relative to release/windows   what differs, in one line
+#
+# A file listed here needs a reason. A file NOT listed here must not
+# exist in raye-base: tests/test_profiles.py fails either way, so the
+# overlap can never be silent.
+profiles/obs.profile   adds title=obs and writes the match pattern once instead of twice; behaviour unchanged

@@ -1,0 +1,114 @@
+#!/usr/bin/make -f
+#
+# Wine picks its own compiler flags; the PE side would not take the
+# hardening ones anyway, and the preloader does not link with LTO. The
+# third-party archives come with the tree (build.sh puts them in
+# third-party/cache) and are checked again here.
+# DXVK is built from third-party/dxvk, the checkout build.sh patched.
+# capture/ is libraye-capture: Wine's unix side loads it by soname, so it
+# goes in the system library folder.
+# Everything is installed in debian/tmp and dealt out by debian/*.install;
+# dh_missing stops the build if a file lands in no package.
+
+include /usr/share/dpkg/architecture.mk
+
+PREFIX = /opt/raye-wine
+# Profiles raye-base already ships a file of the same name for. Both would
+# land on /usr/share/raye/windows-profiles/<name>, which raye-windows-apps
+# owns, and dpkg refuses to unpack two packages over one path. These wait
+# for raye-base to adopt them; release/windows/REPLACES says which and why.
+REPLACED_PROFILES = $(shell sed -n 's|^profiles/\([^[:space:]]*\).*|\1|p' \
+                            release/windows/REPLACES 2>/dev/null)
+OUR_PROFILES = $(filter-out \
+    $(addprefix release/windows/profiles/,$(REPLACED_PROFILES)), \
+    $(wildcard release/windows/profiles/*.profile))
+STAGE = debian/tmp
+JOBS = $(or $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS))),1)
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=-all optimize=-lto
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	sh tools/fetch-third-party.sh --check
+	mkdir -p build
+	cd build && ../configure --prefix=$(PREFIX) --enable-archs=i386,x86_64 \
+		--disable-tests --with-mingw --with-pulse --with-alsa --with-vulkan \
+		--with-wayland --with-x --with-gstreamer --with-ffmpeg --with-va \
+		--with-sdl --with-udev --with-usb --with-cups --with-dbus --with-gnutls \
+		--with-krb5 --with-gssapi --with-v4l2 --with-pcsclite \
+		--without-oss --without-capi --without-netapi --without-coreaudio \
+		--without-hwloc
+
+# DXVK: the flags dpkg exports are for the Linux compiler, not mingw's
+override_dh_auto_build:
+	$(MAKE) -C build -j$(JOBS)
+	$(CC) -O2 -Wall -o build/raye-wine-gpu tools/raye-wine-gpu.c -ldl
+	$(MAKE) -C capture
+	for a in 64 32; do \
+		rm -rf build/dxvk$$a; \
+		env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS \
+		meson setup --cross-file third-party/dxvk/build-win$$a.txt --buildtype release \
+			--prefix=/ --strip build/dxvk$$a third-party/dxvk && \
+		ninja -C build/dxvk$$a -j$(JOBS) || exit 1; \
+	done
+
+override_dh_auto_test:
+	# configure leaves ntsync out without a word when linux/ntsync.h is
+	# missing; every program would then wait the slow way.
+	grep -q '^#define HAVE_LINUX_NTSYNC_H 1' build/include/config.h || \
+		{ echo 'built without linux/ntsync.h' >&2; exit 1; }
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	sh tools/check-names.sh
+	$(MAKE) -C capture check
+endif
+
+# -s: Wine's own install strips the Windows side and marks it builtin again
+override_dh_auto_install:
+	$(MAKE) -C build install DESTDIR=$(CURDIR)/$(STAGE) INSTALL_PROGRAM_FLAGS=-s
+	for d in d3d8/d3d8 d3d9/d3d9 d3d10/d3d10core d3d11/d3d11 dxgi/dxgi; do \
+		install -D -m 644 build/dxvk64/src/$$d.dll $(STAGE)$(PREFIX)/share/wine/raye/x86_64-windows/$${d#*/}.dll && \
+		install -D -m 644 build/dxvk32/src/$$d.dll $(STAGE)$(PREFIX)/share/wine/raye/i386-windows/$${d#*/}.dll || exit 1; \
+	done
+	sh tools/fetch-third-party.sh --unpack $(STAGE)$(PREFIX)
+	install -D -m 644 capture/libraye-capture.so.1 $(STAGE)/usr/lib/$(DEB_HOST_MULTIARCH)/libraye-capture.so.1
+	install -D -m 755 capture/raye-capture-probe $(STAGE)$(PREFIX)/bin/raye-capture-probe
+	install -m 755 build/raye-wine-gpu $(STAGE)$(PREFIX)/bin/
+	install -D -m 644 release/pipewire/50-raye-rates.conf \
+		$(STAGE)/usr/share/pipewire/pipewire.conf.d/50-raye-rates.conf
+	rm -rf $(STAGE)$(PREFIX)/share/man $(STAGE)$(PREFIX)/include
+	# What Raye knows about each Windows game, and the reader the Store
+	# asks before it offers a download. /var/lib is where a later answer
+	# is dropped in, so a title can change without an image rebuild.
+	install -D -m 755 release/windows/raye-windows-titles \
+		$(STAGE)/usr/bin/raye-windows-titles
+	install -d $(STAGE)/usr/share/raye/windows-titles \
+		$(STAGE)/var/lib/raye/windows-titles
+	install -m 644 release/windows/titles/*.titles \
+		$(STAGE)/usr/share/raye/windows-titles/
+ifneq (,$(OUR_PROFILES))
+	install -d $(STAGE)/usr/share/raye/windows-profiles
+	install -m 644 $(OUR_PROFILES) $(STAGE)/usr/share/raye/windows-profiles/
+endif
+	# Import libraries and the build tools are of no use on a desktop.
+	find $(STAGE)$(PREFIX)/lib/wine -name '*.a' -delete
+	cd $(STAGE)$(PREFIX)/bin && rm -f function_grep.pl widl winebuild winedump \
+		winegcc winecpp wineg++ winemaker wmc wrc
+
+override_dh_missing:
+	dh_missing --fail-missing
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
+
+override_dh_dwz:
+
+# Gecko's .xpi files are not plain zips; Mono and Gecko ship as released
+override_dh_strip_nondeterminism:
+	dh_strip_nondeterminism -Xshare/wine/gecko -Xshare/wine/mono
+
+override_dh_shlibdeps:
+	dh_shlibdeps -l$(CURDIR)/debian/raye-wine$(PREFIX)/lib/wine/x86_64-unix
+
+override_dh_makeshlibs:

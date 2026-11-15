@@ -1,0 +1,59 @@
+Subject: dxgi: Duplicate outputs through rayecap
+
+IDXGIOutput1::DuplicateOutput and IDXGIOutput5::DuplicateOutput1 were
+stubs. rayecap is delay-loaded, so dxgi still loads without it.
+---
+diff --git a/dlls/dxgi/Makefile.in b/dlls/dxgi/Makefile.in
+index 6e66cfc..18f6a09 100644
+--- a/dlls/dxgi/Makefile.in
++++ b/dlls/dxgi/Makefile.in
+@@ -1,6 +1,7 @@
+ MODULE    = dxgi.dll
+ IMPORTLIB = dxgi
+ IMPORTS   = gdi32 dxguid uuid wined3d user32 win32u
++DELAYIMPORTS = rayecap
+ EXTRAINCL = $(VKD3D_PE_CFLAGS)
+ 
+ VER_PRODUCTVERSION = 6,0,6000,16386
+diff --git a/dlls/dxgi/output.c b/dlls/dxgi/output.c
+index e828ed0..e32a157 100644
+--- a/dlls/dxgi/output.c
++++ b/dlls/dxgi/output.c
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include "dxgi_private.h"
++#include "rayecap.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dxgi);
+ 
+@@ -542,9 +543,9 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_GetDisplaySurfaceData1(IDXGIOutput6
+ static HRESULT STDMETHODCALLTYPE dxgi_output_DuplicateOutput(IDXGIOutput6 *iface,
+         IUnknown *device, IDXGIOutputDuplication **output_duplication)
+ {
+-    FIXME("iface %p, device %p, output_duplication %p stub!\n", iface, device, output_duplication);
++    TRACE("iface %p, device %p, output_duplication %p.\n", iface, device, output_duplication);
+ 
+-    return E_NOTIMPL;
++    return RayeCaptureDuplicateOutput((IDXGIOutput *)iface, device, 0, NULL, output_duplication);
+ }
+ 
+ /* IDXGIOutput2 methods */
+@@ -583,11 +584,13 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_DuplicateOutput1(IDXGIOutput6 *ifac
+         IUnknown *device, UINT flags, UINT format_count, const DXGI_FORMAT *formats,
+         IDXGIOutputDuplication **output_duplication)
+ {
+-    FIXME("iface %p, device %p, flags %#x, format_count %u, formats %p, "
+-            "output_duplication %p stub!\n", iface, device, flags, format_count,
+-            formats, output_duplication);
++    TRACE("iface %p, device %p, flags %#x, format_count %u, formats %p, output_duplication %p.\n",
++            iface, device, flags, format_count, formats, output_duplication);
+ 
+-    return E_NOTIMPL;
++    if (!format_count || !formats)
++        return E_INVALIDARG;
++    return RayeCaptureDuplicateOutput((IDXGIOutput *)iface, device, format_count, (const int *)formats,
++            output_duplication);
+ }
+ 
+ /* IDXGIOutput6 methods */
