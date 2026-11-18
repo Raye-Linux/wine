@@ -111,7 +111,7 @@ unpack() {
             nvapi)
                 mkdir "$tmp/nvapi"
                 tar -C "$tmp/nvapi" -xzf "$file"
-                cp "$tmp/nvapi/x64/nvapi64.dll" "$data/raye/x86_64-windows/"
+                cp "$tmp/nvapi/x64/nvapi64.dll" "$tmp/nvapi/x64/nvofapi64.dll" "$data/raye/x86_64-windows/"
                 cp "$tmp/nvapi/x32/nvapi.dll" "$data/raye/i386-windows/"
                 cp "$tmp/nvapi/LICENSE" "$data/raye/licenses/dxvk-nvapi" ;;
             *) die "sources.txt: unknown kind $kind" ;;
@@ -123,7 +123,8 @@ unpack() {
         [ -f "$data/raye/x86_64-windows/$f.dll" ] && [ -f "$data/raye/i386-windows/$f.dll" ] ||
             die "$f.dll is missing after unpacking"
     done
-    [ -f "$data/raye/x86_64-windows/nvapi64.dll" ] && [ -f "$data/raye/i386-windows/nvapi.dll" ] ||
+    [ -f "$data/raye/x86_64-windows/nvapi64.dll" ] &&
+        [ -f "$data/raye/x86_64-windows/nvofapi64.dll" ] && [ -f "$data/raye/i386-windows/nvapi.dll" ] ||
         die "nvapi is missing after unpacking"
 }
 

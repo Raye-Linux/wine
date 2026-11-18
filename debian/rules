@@ -83,6 +83,12 @@ override_dh_auto_install:
 	# is dropped in, so a title can change without an image rebuild.
 	install -D -m 755 release/windows/raye-windows-titles \
 		$(STAGE)/usr/bin/raye-windows-titles
+	# a double-clicked Store package: run the desktop program inside, or
+	# say plainly why a Store app can't open
+	install -D -m 755 release/windows/raye-windows-package \
+		$(STAGE)/usr/bin/raye-windows-package
+	install -D -m 644 release/windows/org.raye.windows.package.desktop \
+		$(STAGE)/usr/share/applications/org.raye.windows.package.desktop
 	install -d $(STAGE)/usr/share/raye/windows-titles \
 		$(STAGE)/var/lib/raye/windows-titles
 	install -m 644 release/windows/titles/*.titles \
@@ -91,6 +97,11 @@ ifneq (,$(OUR_PROFILES))
 	install -d $(STAGE)/usr/share/raye/windows-profiles
 	install -m 644 $(OUR_PROFILES) $(STAGE)/usr/share/raye/windows-profiles/
 endif
+	# MS Sans Serif is a bitmap font that cannot be smoothed: without it,
+	# wine.inf sends the name to Tahoma, its outline twin
+	rm -f $(STAGE)$(PREFIX)/share/wine/fonts/sserif*.fon \
+		$(STAGE)$(PREFIX)/share/wine/fonts/ssee*.fon \
+		$(STAGE)$(PREFIX)/share/wine/fonts/ssef*.fon
 	# Import libraries and the build tools are of no use on a desktop.
 	find $(STAGE)$(PREFIX)/lib/wine -name '*.a' -delete
 	cd $(STAGE)$(PREFIX)/bin && rm -f function_grep.pl widl winebuild winedump \

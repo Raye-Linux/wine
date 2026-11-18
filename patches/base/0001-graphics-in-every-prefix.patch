@@ -1,12 +1,13 @@
 Subject: wine.inf: Direct3D on Vulkan in every prefix
 
 Every new or updated prefix gets DXVK (Direct3D 8 to 11), VKD3D-Proton
-(Direct3D 12) and NVAPI from share/wine/raye, and DLL overrides that use
-them first. Values a person changed are kept. NVAPI starts disabled; the
-launcher turns it on for NVIDIA cards.
+(Direct3D 12), NVAPI and its optical flow part (DLSS frame generation)
+from share/wine/raye, and DLL overrides that use them first. Values a
+person changed are kept. NVAPI starts disabled; the launcher turns it on
+for NVIDIA cards.
 ---
 diff --git a/loader/wine.inf.in b/loader/wine.inf.in
-index 9288b58..d6fa053 100644
+index 9288b58..4632004 100644
 --- a/loader/wine.inf.in
 +++ b/loader/wine.inf.in
 @@ -94,7 +94,9 @@ AddReg=\
@@ -27,7 +28,7 @@ index 9288b58..d6fa053 100644
  AddReg=\
      CurrentVersionWow64.ntx86,\
      VCRuntime.ntamd64,\
-@@ -1345,13 +1348,52 @@ windows.system.winmd
+@@ -1345,13 +1348,54 @@ windows.system.winmd
  windows.ui.winmd
  windows.ui.xaml.winmd
  
@@ -44,6 +45,7 @@ index 9288b58..d6fa053 100644
 +d3d12.dll
 +d3d12core.dll
 +nvapi64.dll
++nvofapi64.dll
 +
 +[RayeGraphics32]
 +d3d8.dll
@@ -65,6 +67,7 @@ index 9288b58..d6fa053 100644
 +HKCU,Software\Wine\DllOverrides,"d3d12core",2,"native,builtin"
 +HKCU,Software\Wine\DllOverrides,"nvapi",2,""
 +HKCU,Software\Wine\DllOverrides,"nvapi64",2,""
++HKCU,Software\Wine\DllOverrides,"nvofapi64",2,""
 +
  [WineSourceDirs]
  NlsFiles  = nls

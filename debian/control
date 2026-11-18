@@ -41,7 +41,11 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
          libxinerama1, libxkbregistry0, libxrandr2, libxrender1, libxxf86vm1,
          pipewire-jack, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good,
          gstreamer1.0-plugins-ugly, gstreamer1.0-libav
-Recommends: mesa-vulkan-drivers, pipewire-pulse, libsdl2-2.0-0, fonts-liberation
+# The fonts are what wine.inf maps Arial, Calibri, Cambria and the rest to;
+# plugins-bad has the parsers Media Foundation needs for H.264 video.
+Recommends: mesa-vulkan-drivers, pipewire-pulse, libsdl2-2.0-0, fonts-liberation,
+            fonts-crosextra-carlito, fonts-crosextra-caladea, fonts-cascadia-code,
+            fonts-noto-cjk, gstreamer1.0-plugins-bad
 Description: Raye's layer for Windows programs
  The layer that runs Windows programs on Raye, kept in /opt/raye-wine so
  it never clashes with another one on the system. 64-bit and 32-bit

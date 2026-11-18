@@ -8,6 +8,7 @@ opt/raye-wine/share/wine/wine.inf
 opt/raye-wine/share/wine/winmd
 usr/bin
 usr/lib
+usr/share/applications
 usr/share/pipewire
 usr/share/raye
 var/lib/raye

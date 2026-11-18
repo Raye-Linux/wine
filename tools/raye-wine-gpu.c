@@ -177,7 +177,7 @@ int main(int argc, char **argv)
         if (!v.vulkan)
             printf("RAYE_WINE_OVERRIDES='%s'\n", builtin_d3d);
         else if (v.nvidia)
-            printf("RAYE_WINE_OVERRIDES='nvapi,nvapi64=n'\nDXVK_ENABLE_NVAPI=1\n");
+            printf("RAYE_WINE_OVERRIDES='nvapi,nvapi64,nvofapi64=n'\nDXVK_ENABLE_NVAPI=1\n");
         else
             printf("RAYE_WINE_OVERRIDES=''\n");
         return v.vulkan ? 0 : 1;

@@ -1,0 +1,349 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Opens an app package from the Microsoft Store (.msix, .appx and their
+bundles), the files a double-click on one hands over.
+
+    raye-windows-package FILE            open it
+    raye-windows-package --inspect FILE  what it is, as JSON, nothing run
+
+Two kinds of app come in these files:
+
+- a classic desktop program the publisher wrapped for the Store
+  (EntryPoint Windows.FullTrustApplication, or a packaged classic app).
+  Its files are plain Windows files: they are unpacked in
+  ~/.local/share/raye/windows/packages/<name>, the package's own DLLs
+  next to the program as Windows would find them, a Start entry with the
+  package's icon is made, and raye-run-windows starts it in its own
+  space like any .exe;
+- a Store app in the strict sense (UWP, or built on the Windows App
+  SDK). Those need parts of Windows the layer does not have: they are
+  not started, and the person is told so in plain words, with the Linux
+  or web version when Raye knows one.
+
+A package for ARM processors only is refused the same way.
+"""
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import urllib.parse
+import xml.etree.ElementTree as ET
+import zipfile
+
+HOME = pathlib.Path(os.environ.get("XDG_DATA_HOME") or pathlib.Path.home() / ".local" / "share")
+PACKAGES = HOME / "raye" / "windows" / "packages"
+APPS = HOME / "applications"
+
+# Files that describe the package rather than belong to the program.
+BOOKKEEPING = ("AppxSignature.p7x", "AppxBlockMap.xml", "[Content_Types].xml",
+               "AppxManifest.xml")
+# Architectures this computer can run, best first.
+ARCHES = ("x64", "x86", "neutral")
+# Frameworks that bring Windows UI the layer does not implement.
+UNSUPPORTED_DEPS = ("Microsoft.WindowsAppRuntime", "Microsoft.UI.Xaml",
+                    "Microsoft.NET.Native", "Microsoft.Services.Store")
+# Where Windows puts a package's VFS folders, for each architecture: these
+# DLLs are found next to the program.
+SYSTEM_VFS = {"x64": ("SystemX64", "System"), "x86": ("SystemX86", "System"),
+              "neutral": ("SystemX64", "SystemX86", "System")}
+
+# Store apps people bring most, by package name, and where to get them on
+# Raye instead. store is a Store id, web a page that does the same.
+ALTERNATIVES = {
+    "SpotifyAB.SpotifyMusic": {"store": "com.spotify.Client"},
+    "5319275A.WhatsAppDesktop": {"web": "https://web.whatsapp.com/"},
+    "4DF9E0F8.Netflix": {"web": "https://www.netflix.com/"},
+    "Microsoft.Todos": {"web": "https://to-do.office.com/"},
+    "MSTeams": {"web": "https://teams.microsoft.com/"},
+    "MicrosoftTeams": {"web": "https://teams.microsoft.com/"},
+    "Microsoft.WindowsTerminal": {"store": "org.kde.konsole"},
+    "Microsoft.WindowsNotepad": {"store": "org.kde.kate"},
+    "Microsoft.Paint": {"store": "org.kde.kolourpaint"},
+    "Microsoft.WindowsCalculator": {"store": "org.kde.kcalc"},
+    "Microsoft.ZuneMusic": {"store": "org.videolan.VLC"},
+    "Microsoft.ZuneVideo": {"store": "org.videolan.VLC"},
+    "Microsoft.OutlookForWindows": {"web": "https://outlook.live.com/"},
+    "Microsoft.MicrosoftStickyNotes": {"web": "https://www.onenote.com/stickynotes"},
+    "Facebook.InstagramBeta": {"web": "https://www.instagram.com/"},
+    "BytedancePte.Ltd.TikTok": {"web": "https://www.tiktok.com/"},
+    "Disney.37853FC22B2CE": {"web": "https://www.disneyplus.com/"},
+    "AmazonVideo.PrimeVideo": {"web": "https://www.primevideo.com/"},
+    "Discord.Discord": {"store": "com.discordapp.Discord"},
+    "Telegram.TelegramDesktop": {"store": "org.telegram.desktop"},
+    "Microsoft.MinecraftUWP": {"store": "com.mojang.Minecraft"},
+}
+
+TEXT = {
+    "store_app": {
+        "en": "{name} is an app from the Microsoft Store. Apps of this kind need parts of "
+              "Windows that Raye does not have, so it can't open here.",
+        "fr": "{name} est une appli du Microsoft Store. Ce genre d'appli a besoin de parties "
+              "de Windows que Raye n'a pas : elle ne peut pas s'ouvrir ici.",
+    },
+    "arm": {
+        "en": "{name} is made for ARM processors only, and this PC can't run it.",
+        "fr": "{name} est fait seulement pour les processeurs ARM, ce PC ne peut pas l'ouvrir.",
+    },
+    "bad": {
+        "en": "This file isn't an app package that Raye can read.",
+        "fr": "Ce fichier n'est pas un paquet d'appli que Raye sait lire.",
+    },
+    "hint": {
+        "en": "If the publisher offers a regular installer (.exe or .msi), that one can run.",
+        "fr": "Si l'éditeur propose un installateur classique (.exe ou .msi), celui-là peut fonctionner.",
+    },
+    "has_store": {
+        "en": "An app for Raye does the same job. See it in the Store?",
+        "fr": "Une appli pour Raye fait la même chose. La voir dans le Store ?",
+    },
+    "has_web": {
+        "en": "{name} also works in your web browser. Open it there?",
+        "fr": "{name} fonctionne aussi dans le navigateur. L'y ouvrir ?",
+    },
+    "failed": {
+        "en": "{name} couldn't be unpacked. Check that there's enough free space and try again.",
+        "fr": "Impossible de décompresser {name}. Vérifiez qu'il reste assez d'espace et réessayez.",
+    },
+    "store": {"en": "Open the Store", "fr": "Ouvrir le Store"},
+    "browser": {"en": "Open in browser", "fr": "Ouvrir dans le navigateur"},
+    "close": {"en": "Close", "fr": "Fermer"},
+}
+
+
+def lang():
+    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        v = os.environ.get(var, "")
+        if v:
+            return "fr" if v.startswith("fr") else "en"
+    return "en"
+
+
+def say(key, **kw):
+    return TEXT[key][lang()].format(**kw)
+
+
+def local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def attr(el, name):
+    for k, v in el.attrib.items():
+        if local(k) == name:
+            return v
+    return None
+
+
+def read_manifest(z):
+    root = ET.fromstring(z.read("AppxManifest.xml"))
+    ident = next((e for e in root.iter() if local(e.tag) == "Identity"), None)
+    if ident is None:
+        raise ValueError("no identity")
+    display = next((e.text or "" for e in root.iter() if local(e.tag) == "DisplayName"), "").strip()
+    name = ident.get("Name", "")
+    if not display or display.startswith("ms-resource:"):
+        # a localized name lives in resources.pri; the identity reads well enough
+        display = re.sub(r"^[0-9A-F]+\.", "", name).replace(".", " ")
+        display = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", display).strip() or name
+    apps = [e for e in root.iter() if local(e.tag) == "Application"]
+    deps = [e.get("Name", "") for e in root.iter() if local(e.tag) == "PackageDependency"]
+    logo = ""
+    for e in root.iter():
+        if local(e.tag) == "VisualElements":
+            logo = attr(e, "Square44x44Logo") or attr(e, "Square150x150Logo") or ""
+            break
+    if not logo:
+        logo = next((e.text or "" for e in root.iter() if local(e.tag) == "Logo"), "")
+    desktop = bool(apps) and all(
+        a.get("EntryPoint") == "Windows.FullTrustApplication"
+        or attr(a, "RuntimeBehavior") in ("packagedClassicApp", "win32App")
+        for a in apps)
+    exe = (apps[0].get("Executable") or "").replace("\\", "/") if apps else ""
+    arch = ident.get("ProcessorArchitecture", "neutral").lower()
+    if not apps:
+        kind = "bad"
+    elif arch not in ARCHES:
+        kind = "arm"
+    elif any(d.startswith(UNSUPPORTED_DEPS) for d in deps):
+        kind = "winui"
+    elif desktop and exe.lower().endswith(".exe"):
+        kind = "win32"
+    else:
+        kind = "uwp"
+    return {"kind": kind, "name": name, "display": display, "arch": arch,
+            "executable": exe, "logo": logo.replace("\\", "/"), "deps": deps}
+
+
+def open_package(path):
+    """(the zip of the package to use, the name of it inside a bundle or "")"""
+    z = zipfile.ZipFile(path)
+    names = set(z.namelist())
+    if "AppxManifest.xml" in names:
+        return z, ""
+    if "AppxMetadata/AppxBundleManifest.xml" not in names:
+        raise ValueError("not a package")
+    root = ET.fromstring(z.read("AppxMetadata/AppxBundleManifest.xml"))
+    found = {}
+    for e in root.iter():
+        if local(e.tag) == "Package" and e.get("Type", "application") == "application":
+            found.setdefault(e.get("Architecture", "neutral").lower(), e.get("FileName", ""))
+    for arch in ARCHES:
+        inner = found.get(arch)
+        if inner and inner in names:
+            return zipfile.ZipFile(z.open(inner)), inner
+    # nothing this PC runs: read any one, so the answer says ARM
+    inner = next(iter(found.values()), "")
+    if inner in names:
+        return zipfile.ZipFile(z.open(inner)), inner
+    raise ValueError("empty bundle")
+
+
+def inspect(path):
+    try:
+        z, inner = open_package(path)
+        info = read_manifest(z)
+        # compiled XAML: the program draws its window with the Windows UI
+        # framework the layer does not have, whatever its entry point says
+        if info["kind"] == "win32" and any(n.lower().endswith(".xbf") for n in z.namelist()):
+            info["kind"] = "winui"
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, ET.ParseError):
+        return {"kind": "bad", "name": "", "display": pathlib.Path(path).stem}
+    info["inner"] = inner
+    return info
+
+
+def safe_name(entry):
+    """The path an entry goes to, decoded, or ValueError if it leaves the folder."""
+    name = urllib.parse.unquote(entry).replace("\\", "/")
+    parts = [p for p in name.split("/") if p not in ("", ".")]
+    if name.startswith("/") or any(p == ".." for p in parts) or re.match(r"^[A-Za-z]:", name):
+        raise ValueError("unsafe name in package: %r" % entry)
+    return "/".join(parts)
+
+
+def extract(path, info, dest):
+    z, _ = open_package(path)
+    dest = pathlib.Path(dest)
+    entries = [(e, safe_name(e)) for e in z.namelist() if not e.endswith("/")]
+    tmp = dest.with_name(dest.name + ".new")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    try:
+        for entry, name in entries:
+            if name in BOOKKEEPING or name.startswith("AppxMetadata/"):
+                continue
+            out = tmp / name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(entry) as src, open(out, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        # the program finds the package's system DLLs in its own folder,
+        # as the loader of a packaged app does
+        exe_dir = (tmp / info["executable"]).parent
+        for sub in SYSTEM_VFS.get(info["arch"], ()):
+            vfs = tmp / "VFS" / sub
+            if vfs.is_dir():
+                for f in vfs.iterdir():
+                    if f.is_file() and not (exe_dir / f.name).exists():
+                        shutil.copy2(f, exe_dir / f.name)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    if dest.exists():
+        shutil.rmtree(dest)
+    tmp.rename(dest)
+    return dest
+
+
+def icon(dest, info):
+    """The package's logo as the taskbar would take it: no high-contrast
+    form, the unplated one when there is one, the biggest up to 256 px."""
+    logo = info.get("logo") or ""
+    if not logo:
+        return None
+    base = pathlib.Path(dest) / logo
+    stem, ext = base.stem, base.suffix or ".png"
+    found = [p for p in base.parent.glob(stem + "*" + ext)] if base.parent.is_dir() else []
+    found = [p for p in found if "contrast-" not in p.name and "lightunplated" not in p.name]
+
+    def rank(p):
+        m = re.search(r"\.(scale|targetsize)-(\d+)", p.name)
+        n = int(m.group(2)) if m else 0
+        if m and m.group(1) == "scale":
+            n = n * 44 // 100
+        return (n <= 256, n if n <= 256 else -n, "altform-unplated" in p.name)
+    found.sort(key=rank, reverse=True)
+    return found[0] if found else (base if base.is_file() else None)
+
+
+def slug(name):
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return s or "package"
+
+
+def desktop_entry(display, exe, icon_path):
+    q = lambda s: re.sub(r'([\\"`$])', r"\\\1", s)
+    wm = pathlib.PureWindowsPath(exe.replace("/", "\\")).name.lower()
+    return ("[Desktop Entry]\nType=Application\nName=%s\nExec=raye-run-windows \"%s\"\n"
+            "Icon=%s\nStartupWMClass=%s\nCategories=Utility;\n"
+            % (display.replace("\n", " "), q(exe), icon_path or "raye-eye", wm))
+
+
+def dialog(*args):
+    try:
+        return subprocess.call(["kdialog", "--title", "Raye Linux", "--icon", "raye-eye", *args])
+    except OSError:
+        print(args[-1], file=sys.stderr)
+        return 1
+
+
+def refuse(info):
+    key = {"arm": "arm", "bad": "bad"}.get(info["kind"], "store_app")
+    text = say(key, name=info.get("display") or "")
+    alt = ALTERNATIVES.get(info.get("name", ""), {})
+    if alt.get("store"):
+        if dialog("--yes-label", say("store"), "--no-label", say("close"),
+                  "--yesno", text + "\n\n" + say("has_store", name=info["display"])) == 0:
+            os.execvp("raye-store", ["raye-store", alt["store"]])
+    elif alt.get("web"):
+        if dialog("--yes-label", say("browser"), "--no-label", say("close"),
+                  "--yesno", text + "\n\n" + say("has_web", name=info["display"])) == 0:
+            os.execvp("xdg-open", ["xdg-open", alt["web"]])
+    else:
+        hint = "" if key == "bad" else "\n\n" + say("hint")
+        dialog("--sorry", text + hint)
+    return 1
+
+
+def run(path):
+    info = inspect(path)
+    if info["kind"] != "win32":
+        return refuse(info)
+    dest = PACKAGES / slug(info["name"])
+    try:
+        extract(path, info, dest)
+    except (OSError, ValueError, zipfile.BadZipFile):
+        dialog("--sorry", say("failed", name=info["display"]))
+        return 1
+    exe = dest / info["executable"]
+    found = icon(dest, info)
+    APPS.mkdir(parents=True, exist_ok=True)
+    entry = APPS / ("org.raye.windows.pkg_%s.desktop" % slug(info["name"]).replace("-", "_"))
+    entry.write_text(desktop_entry(info["display"], str(exe), str(found) if found else ""))
+    os.execvp("raye-run-windows", ["raye-run-windows", str(exe)])
+
+
+def main(argv):
+    if len(argv) == 3 and argv[1] == "--inspect":
+        print(json.dumps(inspect(argv[2]), indent=1))
+        return 0
+    if len(argv) != 2 or not os.path.isfile(argv[1]):
+        print("usage: raye-windows-package [--inspect] FILE", file=sys.stderr)
+        return 2
+    return run(argv[1])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

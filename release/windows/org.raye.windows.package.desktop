@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Microsoft Store app
+Name[fr]=Appli du Microsoft Store
+Comment=Open an app package from the Microsoft Store
+Comment[fr]=Ouvrir un paquet d'appli du Microsoft Store
+Exec=/usr/bin/raye-windows-package %f
+Icon=raye-eye
+Terminal=false
+NoDisplay=true
+MimeType=application/msix;application/appx;application/msixbundle;application/appxbundle;

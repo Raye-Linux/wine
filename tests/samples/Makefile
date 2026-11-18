@@ -4,7 +4,8 @@ CC = x86_64-w64-mingw32-gcc
 CC32 = i686-w64-mingw32-gcc
 CFLAGS = -O2 -Wall
 PROGRAMS = d3d11-triangle.exe d3d12-clear.exe sound-check.exe crash.exe d2d1-effect.exe \
-           runtimes-check.exe runtimes-check32.exe midi-in.exe child-focus.exe
+           runtimes-check.exe runtimes-check32.exe midi-in.exe child-focus.exe \
+           fontprobe.exe laa-check32.exe
 
 all: $(PROGRAMS)
 
@@ -31,6 +32,12 @@ midi-in.exe: midi-in.c
 
 child-focus.exe: child-focus.c
 	$(CC) $(CFLAGS) -o $@ $< -lgdi32
+
+fontprobe.exe: fontprobe.c
+	$(CC) $(CFLAGS) -o $@ $< -lgdi32 -luser32
+
+laa-check32.exe: laa-check.c
+	$(CC32) $(CFLAGS) -Wl,--disable-large-address-aware -o $@ $<
 
 crash.exe: crash.c
 	$(CC) $(CFLAGS) -mwindows -o $@ $<

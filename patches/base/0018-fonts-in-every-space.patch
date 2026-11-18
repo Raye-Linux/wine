@@ -1,0 +1,74 @@
+Subject: wine.inf: map the common font names to fonts Raye ships
+
+Courier New, Consolas and Times New Roman all came out as Liberation
+Sans, so editors and terminals got a proportional font, and MS Sans
+Serif was a bitmap font no smoothing reaches: the licence of WinRAR's
+installer, among others, was drawn in it. The names programs ask for
+most now map to the metric twins and free fonts Raye ships, and MS Sans
+Serif, whose bitmap files the package leaves out, to Tahoma, the outline
+font drawn as its twin. A real font of that name, once installed, still
+wins. Smoothing itself keeps following the system's fontconfig.
+---
+diff --git a/loader/wine.inf.in b/loader/wine.inf.in
+index 9288b58..c5b0921 100644
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -70,6 +70,7 @@ AddReg=\
+     Printing,\
+     Services, \
+     SessionMgr,\
++    RayeFonts,\
+     ThemeManager
+ 
+ [DefaultInstall]
+@@ -525,6 +526,50 @@ HKLM,%FontSubStr%,"Times New Roman Greek,161",,"Times New Roman,161"
+ HKLM,%FontSubStr%,"Times New Roman TUR,162",,"Times New Roman,162"
+ HKLM,System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts,"LogPixels",0x10003,0x00000060
+ 
++[RayeFonts]
++;; Fonts programs ask for by name, mapped to the free ones Raye ships,
++;; metric twins first. A real font of that name, once installed, wins.
++;; MS Shell Dlg and Tahoma keep the builtin Tahoma old dialogs fit, and
++;; MS Sans Serif goes to it too: its bitmap files are not shipped, they
++;; cannot be smoothed and Tahoma was drawn as their twin.
++HKLM,%FontSubStr%,"MS Sans Serif",0x2,"Tahoma"
++HKLM,%FontSubStr%,"MS Sans Serif Regular",0x2,"Tahoma"
++HKCU,Software\Wine\Fonts\Replacements,"Arial",0x10002,"Liberation Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Arial Narrow",0x10002,"Liberation Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Microsoft Sans Serif",0x10002,"Liberation Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Times New Roman",0x10002,"Liberation Serif"
++HKCU,Software\Wine\Fonts\Replacements,"Courier New",0x10002,"Liberation Mono"
++HKCU,Software\Wine\Fonts\Replacements,"Calibri",0x10002,"Carlito","Liberation Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Calibri Light",0x10002,"Carlito","Liberation Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Cambria",0x10002,"Caladea","Liberation Serif"
++HKCU,Software\Wine\Fonts\Replacements,"Cambria Math",0x10002,"Caladea","Liberation Serif"
++HKCU,Software\Wine\Fonts\Replacements,"Consolas",0x10002,"Cascadia Mono","Liberation Mono"
++HKCU,Software\Wine\Fonts\Replacements,"Lucida Console",0x10002,"Liberation Mono","DejaVu Sans Mono"
++HKCU,Software\Wine\Fonts\Replacements,"Verdana",0x10002,"DejaVu Sans","Liberation Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Georgia",0x10002,"DejaVu Serif","Liberation Serif"
++HKCU,Software\Wine\Fonts\Replacements,"Segoe UI",0x10002,"Inter","Noto Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Segoe UI Variable",0x10002,"Inter","Noto Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Segoe UI Semibold",0x10002,"Inter","Noto Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Segoe UI Symbol",0x10002,"Noto Sans Symbols2","Noto Sans Symbols","DejaVu Sans"
++HKCU,Software\Wine\Fonts\Replacements,"Microsoft YaHei",0x10002,"Noto Sans CJK SC"
++HKCU,Software\Wine\Fonts\Replacements,"Microsoft YaHei UI",0x10002,"Noto Sans CJK SC"
++HKCU,Software\Wine\Fonts\Replacements,"SimSun",0x10002,"Noto Sans CJK SC"
++HKCU,Software\Wine\Fonts\Replacements,"NSimSun",0x10002,"Noto Sans CJK SC"
++HKCU,Software\Wine\Fonts\Replacements,"SimHei",0x10002,"Noto Sans CJK SC"
++HKCU,Software\Wine\Fonts\Replacements,"Microsoft JhengHei",0x10002,"Noto Sans CJK TC"
++HKCU,Software\Wine\Fonts\Replacements,"Microsoft JhengHei UI",0x10002,"Noto Sans CJK TC"
++HKCU,Software\Wine\Fonts\Replacements,"PMingLiU",0x10002,"Noto Sans CJK TC"
++HKCU,Software\Wine\Fonts\Replacements,"MS Gothic",0x10002,"Noto Sans Mono CJK JP","Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"MS PGothic",0x10002,"Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"MS UI Gothic",0x10002,"Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"Meiryo",0x10002,"Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"Meiryo UI",0x10002,"Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"Yu Gothic",0x10002,"Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"Yu Gothic UI",0x10002,"Noto Sans CJK JP"
++HKCU,Software\Wine\Fonts\Replacements,"Malgun Gothic",0x10002,"Noto Sans CJK KR"
++HKCU,Software\Wine\Fonts\Replacements,"Gulim",0x10002,"Noto Sans CJK KR"
++HKCU,Software\Wine\Fonts\Replacements,"Dotum",0x10002,"Noto Sans CJK KR"
++
+ [MCI]
+ HKLM,%Mci32Str%,"AVIVideo",,"mciavi32.dll"
+ HKLM,%Mci32Str%,"CDAudio",,"mcicda.dll"

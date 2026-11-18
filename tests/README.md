@@ -1,7 +1,7 @@
 # What these tests cover, and what they do not
 
 ```
-python3 -I -B -m unittest discover -s tests        # 72 checks, ~6 s, no Wine tree
+python3 -I -B -m unittest discover -s tests        # 139 checks, ~12 s, no Wine tree
 ```
 
 Run by `build.sh` before it builds anything, and by
@@ -15,6 +15,9 @@ Run by `build.sh` before it builds anything, and by
 | `test_names.py` | 12 | the upstream name never reaching a user |
 | `test_i18n.py` | 19 | the French of everything this repository ships: the rename table, the 255 per-title answers, and the strings a patch ADDS |
 | `test_packaging.py` | 6 | the build tree gets what the packaging reaches for, and no dpkg conflict |
+| `test_fonts.py` | 12 | font names programs ask for map to fonts Raye ships; MS Sans Serif to Tahoma |
+| `test_package.py` | 25 | Store packages (.msix, .appx, bundles): what runs, what is refused, safe unpacking |
+| `test_proton_parity.py` | 4 | WINE_LARGE_ADDRESS_AWARE gives 32-bit programs 4 GB |
 
 ## The gaps, named
 
@@ -31,6 +34,11 @@ a failure would look like if it happened.
 - **`capture/`.** `capture/tests/test-logic.c` exists and runs, but only
   inside the package build (`override_dh_auto_test`). A broken share
   picker means programs that read the screen get a black rectangle.
+- **What a space really draws.** `test_fonts.py` reads the patch;
+  `tests/samples/fontprobe.exe` run in a space says which font each name
+  gets (Courier New must come back monospace, MS Sans Serif not as a
+  bitmap), and `laa-check32.exe` with WINE_LARGE_ADDRESS_AWARE=1 must say
+  4095 MB.
 - **`audio/measure.sh`** and the Direct3D / sound sample programs under
   `tests/samples/`: by hand, in the test VM, per the app list in
   the design notes of the iso repository.
