@@ -44,7 +44,7 @@ sys.dont_write_bytecode = True
 # The keys raye-run-windows looks for. Anything else in a profile is
 # ignored by today's runner -- which is fine for title=, deliberately,
 # but a typo in one of these is invisible.
-KEYS = ("name", "match", "verbs", "env", "native", "title", "opens", "files")
+KEYS = ("name", "match", "verbs", "env", "native", "title", "opens", "files", "game", "launcher")
 
 
 def value(path, key):
