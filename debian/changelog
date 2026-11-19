@@ -1,3 +1,12 @@
+raye-wine (11.21-1~raye5) resolute; urgency=medium
+
+  * Windows programs get the fonts they ask for (Arial, Calibri, Courier
+    New, Segoe UI...), MS Sans Serif text is smooth, 32-bit games can use
+    4 GB, DLSS frame generation on NVIDIA, and Microsoft Store packages
+    open or say plainly why they can't.
+
+ -- techoraye <190692880+techoraye@users.noreply.github.com>  Thu, 19 Nov 2026 05:00:00 +0000
+
 raye-wine (11.21-1~raye4) resolute; urgency=medium
 
   * Ship the layer in six parts (32-bit side, .NET, web views for 64-bit
