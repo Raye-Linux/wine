@@ -1,0 +1,263 @@
+Subject: wbemprox, hid and bus drivers: Windows names for devices and makers
+
+Programs that list hardware (system information tools, crash reporters,
+launchers) read the names of devices and their makers from WMI and from
+the device installation files. They said "Wine" and "The Wine Project".
+Give them the names Windows uses for the same kind of device.
+---
+diff --git a/dlls/hidclass.sys/input.inf b/dlls/hidclass.sys/input.inf
+--- a/dlls/hidclass.sys/input.inf
++++ b/dlls/hidclass.sys/input.inf
+@@ -4,10 +4,10 @@
+ Class=HIDClass
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+-Wine HID device=device_section,HID_DEVICE
++HID-compliant device=device_section,HID_DEVICE
+ 
+ [device_section.Services]
+ AddService = ,0x2
+diff --git a/dlls/mouhid.sys/mouhid.inf b/dlls/mouhid.sys/mouhid.inf
+--- a/dlls/mouhid.sys/mouhid.inf
++++ b/dlls/mouhid.sys/mouhid.inf
+@@ -4,7 +4,7 @@
+ Class=System
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+ HID touch screen device=device_section,HID_DEVICE_UP:000D_U:0004
+@@ -13,8 +13,8 @@
+ AddService = mouhid,0x2,svc_section
+ 
+ [svc_section]
+-Description="Wine HID mouse device driver"
+-DisplayName="Wine HID mouse"
++Description="HID mouse driver"
++DisplayName="HID mouse"
+ ServiceBinary="%12%\mouhid.sys"
+ LoadOrderGroup="WinePlugPlay"
+ ServiceType=1
+diff --git a/dlls/wbemprox/builtin.c b/dlls/wbemprox/builtin.c
+--- a/dlls/wbemprox/builtin.c
++++ b/dlls/wbemprox/builtin.c
+@@ -1663,7 +1663,7 @@
+ static WCHAR *get_bios_manufacturer( const char *buf, UINT len )
+ {
+     WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BIOS, 0, offsetof(struct smbios_bios, vendor), buf, len );
+-    if (!ret) return wcsdup( L"The Wine Project" );
++    if (!ret) return wcsdup( L"System manufacturer" );
+     return ret;
+ }
+ 
+@@ -1709,7 +1709,7 @@
+ static WCHAR *get_bios_smbiosbiosversion( const char *buf, UINT len )
+ {
+     WCHAR *ret = get_smbios_string( SMBIOS_TYPE_BIOS, 0, offsetof(struct smbios_bios, version), buf, len );
+-    if (!ret) return wcsdup( L"Wine" );
++    if (!ret) return wcsdup( L"1.0" );
+     return ret;
+ }
+ 
+@@ -1998,14 +1998,14 @@
+ static WCHAR *get_compsysproduct_name( const char *buf, UINT len )
+ {
+     WCHAR *ret = get_smbios_string( SMBIOS_TYPE_SYSTEM, 0, offsetof(struct smbios_system, product), buf, len );
+-    if (!ret) return wcsdup( L"Wine" );
++    if (!ret) return wcsdup( L"System Product Name" );
+     return ret;
+ }
+ 
+ static WCHAR *get_compsysproduct_vendor( const char *buf, UINT len )
+ {
+     WCHAR *ret = get_smbios_string( SMBIOS_TYPE_SYSTEM, 0, offsetof(struct smbios_system, vendor), buf, len );
+-    if (!ret) return wcsdup( L"The Wine Project" );
++    if (!ret) return wcsdup( L"System manufacturer" );
+     return ret;
+ }
+ 
+@@ -3262,7 +3262,7 @@
+         rec->index                = aa->IfIndex;
+         rec->interface_index      = aa->IfIndex;
+         rec->mac_address          = get_mac_address( aa->PhysicalAddress, aa->PhysicalAddressLength );
+-        rec->manufacturer         = L"The Wine Project";
++        rec->manufacturer         = L"(Standard network adapters)";
+         rec->name                 = wcsdup( aa->FriendlyName );
+         rec->netenabled           = connection_status ? -1 : 0;
+         rec->netconnection_status = connection_status;
+@@ -3535,7 +3535,7 @@
+     rec->devicelocator        = L"DIMM 0";
+     rec->formfactor           = 8; /* DIMM */
+     rec->memorytype           = 9; /* RAM */
+-    rec->manufacturer         = L"Wine";
++    rec->manufacturer         = L"";
+     rec->partnumber           = L"";
+     rec->serial               = L"";
+     rec->speed                = 3200;
+@@ -3629,7 +3629,7 @@
+                             ret[i].caption = get_reg_value( key_instance, L"DeviceDesc" );
+                             ret[i].class_guid = wcslwr( get_reg_value( key_instance, L"ClassGUID" ) );
+                             ret[i].device_id = wcsupr( build_pnp_device_id( class, product, instance ) );
+-                            ret[i].manufacturer = L"The Wine Project";
++                            ret[i].manufacturer = L"(Standard system devices)";
+                             ret[i].name = get_reg_value( key_instance, L"DeviceDesc" );
+                             ret[i].service = get_reg_value( key_instance, L"Service" );
+                             RegCloseKey( key_instance );
+@@ -4291,7 +4291,7 @@
+     rec->lastbootuptime         = get_lastbootuptime();
+     rec->localdatetime          = get_localdatetime();
+     rec->locale                 = get_locale();
+-    rec->manufacturer           = L"The Wine Project";
++    rec->manufacturer           = L"Microsoft Corporation";
+     rec->name                   = get_osname( rec->caption );
+     rec->operatingsystemsku     = get_operatingsystemsku();
+     rec->organization           = get_organization();
+@@ -4575,7 +4575,7 @@
+ static WCHAR *get_systemenclosure_manufacturer( const char *buf, UINT len )
+ {
+     WCHAR *ret = get_smbios_string( SMBIOS_TYPE_CHASSIS, 0, offsetof(struct smbios_chassis, vendor), buf, len );
+-    if (!ret) return wcsdup( L"Wine" );
++    if (!ret) return wcsdup( L"System manufacturer" );
+     return ret;
+ }
+ 
+@@ -4957,7 +4957,7 @@
+     rec = (struct record_sounddevice *)table->data;
+     rec->caption = L"High Definition Audio Device";
+     rec->deviceid = L"HDAUDIO\\FUNC_01&VEN_0000&DEV_0000&SUBSYS_00000000&REV_0000\\0&DEADBEEF&0&DEAD";
+-    rec->manufacturer = L"The Wine Project";
++    rec->manufacturer = L"(Standard system devices)";
+     rec->name = L"High Definition Audio Device";
+     rec->pnpdeviceid = rec->deviceid;
+     rec->productname = L"High Definition Audio Device";
+diff --git a/dlls/winebth.sys/winebth.inf b/dlls/winebth.sys/winebth.inf
+--- a/dlls/winebth.sys/winebth.inf
++++ b/dlls/winebth.sys/winebth.inf
+@@ -4,17 +4,17 @@
+ Class=System
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+-Wine Bluetooth bus driver=device_section,root\winebth
++Bluetooth enumerator=device_section,root\winebth
+ 
+ [device_section.Services]
+ AddService = winebth,0x2,svc_section
+ 
+ [svc_section]
+-Description="Wine Bluetooth bus driver"
+-DisplayName="Wine Bluetooth bus"
++Description="Bluetooth enumerator"
++DisplayName="Bluetooth bus"
+ ServiceBinary="%12%\winebth.sys"
+ LoadOrderGroup="WinePlugPlay"
+ ServiceType=1
+diff --git a/dlls/winebus.sys/winebus.inf b/dlls/winebus.sys/winebus.inf
+--- a/dlls/winebus.sys/winebus.inf
++++ b/dlls/winebus.sys/winebus.inf
+@@ -4,17 +4,17 @@
+ Class=System
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+-Wine HID bus driver=device_section,root\winebus
++HID bus enumerator=device_section,root\winebus
+ 
+ [device_section.Services]
+ AddService = winebus,0x2,svc_section
+ 
+ [svc_section]
+-Description="Wine HID bus driver"
+-DisplayName="Wine HID bus"
++Description="HID bus enumerator"
++DisplayName="HID bus"
+ ServiceBinary="%12%\winebus.sys"
+ LoadOrderGroup="WinePlugPlay"
+ ServiceType=1
+diff --git a/dlls/winehid.sys/winehid.inf b/dlls/winehid.sys/winehid.inf
+--- a/dlls/winehid.sys/winehid.inf
++++ b/dlls/winehid.sys/winehid.inf
+@@ -4,17 +4,17 @@
+ Class=HIDClass
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+-Wine HID compatible device=device_section,WINEBUS\WINE_COMP_HID
++USB Input Device=device_section,WINEBUS\WINE_COMP_HID
+ 
+ [device_section.Services]
+ AddService = winehid,0x2,svc_section
+ 
+ [svc_section]
+-Description="Wine HID Minidriver"
+-DisplayName="Wine HID"
++Description="HID minidriver"
++DisplayName="HID minidriver"
+ ServiceBinary="%12%\winehid.sys"
+ LoadOrderGroup="WinePlugPlay"
+ ServiceType=1
+diff --git a/dlls/wineusb.sys/wineusb.inf b/dlls/wineusb.sys/wineusb.inf
+--- a/dlls/wineusb.sys/wineusb.inf
++++ b/dlls/wineusb.sys/wineusb.inf
+@@ -4,17 +4,17 @@
+ Class=System
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+-Wine USB bus driver=device_section,root\wineusb
++USB bus enumerator=device_section,root\wineusb
+ 
+ [device_section.Services]
+ AddService = wineusb,0x2,svc_section
+ 
+ [svc_section]
+-Description="Wine USB bus driver"
+-DisplayName="Wine USB bus"
++Description="USB bus enumerator"
++DisplayName="USB bus"
+ ServiceBinary="%12%\wineusb.sys"
+ LoadOrderGroup="WinePlugPlay"
+ ServiceType=1
+diff --git a/dlls/winexinput.sys/winexinput.inf b/dlls/winexinput.sys/winexinput.inf
+--- a/dlls/winexinput.sys/winexinput.inf
++++ b/dlls/winexinput.sys/winexinput.inf
+@@ -4,17 +4,17 @@
+ Class=System
+ 
+ [Manufacturer]
+-Wine=mfg_section
++(Standard system devices)=mfg_section
+ 
+ [mfg_section]
+-Wine XInput compatible device=device_section,WINEBUS\WINE_COMP_XINPUT
++XINPUT compatible HID device=device_section,WINEBUS\WINE_COMP_XINPUT
+ 
+ [device_section.Services]
+ AddService = xinput,0x2,svc_section
+ 
+ [svc_section]
+-Description="Wine XInput device driver"
+-DisplayName="Wine XInput"
++Description="XINPUT device driver"
++DisplayName="XINPUT"
+ ServiceBinary="%12%\winexinput.sys"
+ LoadOrderGroup="WinePlugPlay"
+ ServiceType=1

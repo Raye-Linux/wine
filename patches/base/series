@@ -19,3 +19,6 @@
 0018-fonts-in-every-space.patch
 0019-large-address-aware.patch
 0020-hide-version-exports.patch
+0021-raye-file-dialog.patch
+0022-device-manager-names.patch
+0023-serial-ports.patch

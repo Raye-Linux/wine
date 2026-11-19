@@ -1,0 +1,739 @@
+Subject: comdlg32: Raye's file dialog for Open, Save and folders
+
+A program asking for a file or a folder gets the desktop's own dialog,
+shown by raye-file-dialog, in place of the one the layer draws:
+GetOpenFileName, GetSaveFileName (both kinds) and IFileDialog. The
+program keeps repainting while it is up, and the person's folders come
+back through the space's links (C:\users\<name>\Documents\...). A dialog
+with the program's own template or extra choices keeps the usual one,
+and so does everything when the helper is missing or RAYE_FILE_DIALOG=off.
+---
+diff --git a/dlls/comdlg32/Makefile.in b/dlls/comdlg32/Makefile.in
+index 4de12ae..93c3a69 100644
+--- a/dlls/comdlg32/Makefile.in
++++ b/dlls/comdlg32/Makefile.in
+@@ -18,6 +18,7 @@ SOURCES = \
+ 	finddlg.c \
+ 	fontdlg.c \
+ 	itemdlg.c \
++	nativedlg.c \
+ 	pd32_collate.svg \
+ 	pd32_landscape.svg \
+ 	pd32_nocollate.svg \
+diff --git a/dlls/comdlg32/cdlg.h b/dlls/comdlg32/cdlg.h
+index 79c951d..046e6d8 100644
+--- a/dlls/comdlg32/cdlg.h
++++ b/dlls/comdlg32/cdlg.h
+@@ -182,6 +182,23 @@ void FILEDLG95_OnOpenMessage(HWND hwnd, int idCaption, int idText);
+ extern BOOL GetFileName31A( OPENFILENAMEA *lpofn, UINT dlgType );
+ extern BOOL GetFileName31W( OPENFILENAMEW *lpofn, UINT dlgType );
+ 
++/* Raye's file dialog (nativedlg.c) */
++struct native_dialog
++{
++    enum { NATIVE_OPEN, NATIVE_OPEN_MULTIPLE, NATIVE_SAVE, NATIVE_FOLDER } mode;
++    const WCHAR *title;
++    const WCHAR *dir;   /* where to open, a Windows path */
++    const WCHAR *name;  /* the name a Save dialog proposes */
++    const WCHAR **filter_names;
++    const WCHAR **filter_specs;
++    UINT filter_count;
++    UINT filter_index;  /* 1-based */
++};
++BOOL native_file_dialog_enabled(void);
++/* S_OK: *paths holds *count Windows paths, each ended by a nul, then one
++ * more nul; free() it. S_FALSE: cancelled. E_NOTIMPL: no dialog shown. */
++HRESULT native_file_dialog(HWND owner, const struct native_dialog *req, WCHAR **paths, UINT *count);
++
+ #define ONOPEN_BROWSE 1
+ #define ONOPEN_OPEN   2
+ #define ONOPEN_SEARCH 3
+diff --git a/dlls/comdlg32/filedlg.c b/dlls/comdlg32/filedlg.c
+index 286b9f4..d110e3f 100644
+--- a/dlls/comdlg32/filedlg.c
++++ b/dlls/comdlg32/filedlg.c
+@@ -531,11 +531,167 @@ static void init_filedlg_infoA(OPENFILENAMEA *ofn, FileOpenDlgInfos *info)
+  *
+  * Call GetFileName95 with this structure and clean the memory.
+  */
++/* Raye's file dialog in place of this one; -1 when it is not shown */
++static int native_ofn(FileOpenDlgInfos *info, UINT dlg_type)
++{
++    OPENFILENAMEW *ofn = info->ofnInfos;
++    struct native_dialog req = { 0 };
++    const WCHAR *names[64], *specs[64], *p;
++    WCHAR dir[MAX_PATH] = { 0 }, *name = NULL, *paths, *first, *slash, *ext;
++    UINT count, need, offset;
++    HRESULT hr;
++
++    /* a dialog of the program's own design, or old-style multiple choice */
++    if (ofn->Flags & (OFN_ENABLETEMPLATE | OFN_ENABLETEMPLATEHANDLE)) return -1;
++    if ((ofn->Flags & OFN_ALLOWMULTISELECT) && !(ofn->Flags & OFN_EXPLORER)) return -1;
++    if (!native_file_dialog_enabled()) return -1;
++
++    if (dlg_type == SAVE_DIALOG) req.mode = NATIVE_SAVE;
++    else if (ofn->Flags & OFN_ALLOWMULTISELECT) req.mode = NATIVE_OPEN_MULTIPLE;
++    else req.mode = NATIVE_OPEN;
++    req.title = info->title;
++
++    for (p = info->filter; p && *p && req.filter_count < ARRAY_SIZE(names); )
++    {
++        names[req.filter_count] = p;
++        p += lstrlenW(p) + 1;
++        if (!*p) break;
++        specs[req.filter_count++] = p;
++        p += lstrlenW(p) + 1;
++    }
++    req.filter_names = names;
++    req.filter_specs = specs;
++    req.filter_index = ofn->nFilterIndex ? ofn->nFilterIndex : 1;
++
++    if (info->filename && *info->filename)
++    {
++        if ((slash = wcsrchr(info->filename, '\\')))
++        {
++            lstrcpynW(dir, info->filename, min(slash - info->filename + 1, MAX_PATH));
++            name = slash + 1;
++        }
++        else name = info->filename;
++        if (wcspbrk(name, L"*?")) name = NULL;
++    }
++    if (info->initdir && *info->initdir) lstrcpynW(dir, info->initdir, MAX_PATH);
++    if (!dir[0]) GetCurrentDirectoryW(MAX_PATH, dir);
++    req.dir = dir;
++    req.name = name;
++
++    hr = native_file_dialog(ofn->hwndOwner, &req, &paths, &count);
++    if (hr == E_NOTIMPL) return -1;
++    COMDLG32_SetCommDlgExtendedError(0);
++    if (hr != S_OK) return FALSE;
++
++    first = paths;
++    /* a name typed without an extension gets the program's default one */
++    if (req.mode == NATIVE_SAVE && info->defext && *info->defext &&
++        !*PathFindExtensionW(PathFindFileNameW(first)))
++    {
++        WCHAR *longer = malloc((lstrlenW(first) + lstrlenW(info->defext) + 3) * sizeof(WCHAR));
++        lstrcpyW(longer, first);
++        lstrcatW(longer, L".");
++        lstrcatW(longer, info->defext);
++        longer[lstrlenW(longer) + 1] = 0;
++        free(paths);
++        paths = first = longer;
++    }
++
++    if (count > 1)
++    {
++        /* "folder\0name\0name\0\0", the way Explorer-style dialogs answer */
++        WCHAR *list, *q, *it;
++        UINT len;
++        slash = wcsrchr(first, '\\');
++        offset = slash - first + (slash == first + 2 ? 1 : 0);
++        len = offset + 2;
++        for (it = paths; *it; it += lstrlenW(it) + 1) len += lstrlenW(PathFindFileNameW(it)) + 1;
++        q = list = calloc(len, sizeof(WCHAR));
++        memcpy(q, first, offset * sizeof(WCHAR));
++        q += offset + 1;
++        for (it = paths; *it; it += lstrlenW(it) + 1)
++        {
++            lstrcpyW(q, PathFindFileNameW(it));
++            q += lstrlenW(q) + 1;
++        }
++        free(paths);
++        paths = first = list;
++        need = len;
++        offset = offset + 1;
++    }
++    else
++    {
++        need = lstrlenW(first) + (ofn->Flags & OFN_ALLOWMULTISELECT ? 2 : 1);
++        offset = PathFindFileNameW(first) - first;
++    }
++
++    if (!info->unicode)
++    {
++        int bytes = WideCharToMultiByte(CP_ACP, 0, paths, need, NULL, 0, NULL, NULL);
++        OPENFILENAMEA *ofna = (OPENFILENAMEA *)ofn;
++        if (ofna->lpstrFile)
++        {
++            if ((DWORD)bytes > ofna->nMaxFile)
++            {
++                if (ofna->nMaxFile >= 2) *(WORD *)ofna->lpstrFile = bytes;
++                COMDLG32_SetCommDlgExtendedError(FNERR_BUFFERTOOSMALL);
++                free(paths);
++                return FALSE;
++            }
++            WideCharToMultiByte(CP_ACP, 0, paths, need, ofna->lpstrFile, ofna->nMaxFile, NULL, NULL);
++        }
++        if (ofna->lpstrFileTitle && count == 1)
++            WideCharToMultiByte(CP_ACP, 0, PathFindFileNameW(first), -1, ofna->lpstrFileTitle,
++                                ofna->nMaxFileTitle, NULL, NULL);
++        offset = WideCharToMultiByte(CP_ACP, 0, paths, offset, NULL, 0, NULL, NULL);
++    }
++    else
++    {
++        if (ofn->lpstrFile)
++        {
++            if (need > ofn->nMaxFile)
++            {
++                if (ofn->nMaxFile >= 1) *(WORD *)ofn->lpstrFile = need;
++                COMDLG32_SetCommDlgExtendedError(FNERR_BUFFERTOOSMALL);
++                free(paths);
++                return FALSE;
++            }
++            memcpy(ofn->lpstrFile, paths, need * sizeof(WCHAR));
++        }
++        if (ofn->lpstrFileTitle && count == 1)
++            lstrcpynW(ofn->lpstrFileTitle, PathFindFileNameW(first), ofn->nMaxFileTitle);
++    }
++    ofn->nFileOffset = offset;
++    ofn->nFileExtension = 0;
++    if (count == 1)
++    {
++        ext = PathFindExtensionW(first);
++        if (*ext) ofn->nFileExtension = offset + lstrlenW(PathFindFileNameW(first)) - lstrlenW(ext) + 1;
++        if (!info->unicode && *ext)
++        {
++            /* in the program's code page the name can be shorter */
++            int name_bytes = WideCharToMultiByte(CP_ACP, 0, PathFindFileNameW(first), ext - PathFindFileNameW(first),
++                                                 NULL, 0, NULL, NULL);
++            ofn->nFileExtension = offset + name_bytes + 1;
++        }
++    }
++    if (!(ofn->Flags & OFN_NOCHANGEDIR))
++    {
++        WCHAR folder[MAX_PATH];
++        lstrcpynW(folder, first, MAX_PATH);
++        if (count == 1) PathRemoveFileSpecW(folder);
++        SetCurrentDirectoryW(folder);
++    }
++    free(paths);
++    return TRUE;
++}
++
+ static BOOL GetFileDialog95(FileOpenDlgInfos *info, UINT dlg_type)
+ {
+     WCHAR *current_dir = NULL;
+     unsigned int i;
+     BOOL ret;
++    int native;
+ 
+     /* save current directory */
+     if (info->ofnInfos->Flags & OFN_NOCHANGEDIR)
+@@ -544,7 +700,9 @@ static BOOL GetFileDialog95(FileOpenDlgInfos *info, UINT dlg_type)
+         GetCurrentDirectoryW(MAX_PATH, current_dir);
+     }
+ 
+-    switch (dlg_type)
++    if ((native = native_ofn(info, dlg_type)) >= 0)
++        ret = native;
++    else switch (dlg_type)
+     {
+     case OPEN_DIALOG:
+         ret = GetFileName95(info);
+diff --git a/dlls/comdlg32/itemdlg.c b/dlls/comdlg32/itemdlg.c
+index d8c64a2..ebcb0c7 100644
+--- a/dlls/comdlg32/itemdlg.c
++++ b/dlls/comdlg32/itemdlg.c
+@@ -2524,13 +2524,160 @@ static ULONG WINAPI IFileDialog2_fnRelease(IFileDialog2 *iface)
+     return ref;
+ }
+ 
++/* controls the program added that only its own dialog can show */
++static BOOL needs_own_dialog(struct list *controls)
++{
++    customctrl *ctrl;
++
++    LIST_FOR_EACH_ENTRY(ctrl, controls, customctrl, entry)
++    {
++        switch (ctrl->type)
++        {
++        case IDLG_CCTRL_CHECKBUTTON:
++        case IDLG_CCTRL_SEPARATOR:
++        case IDLG_CCTRL_TEXT:
++            break;
++        case IDLG_CCTRL_VISUALGROUP:
++            if (needs_own_dialog(&ctrl->sub_cctrls)) return TRUE;
++            break;
++        default:
++            return TRUE;
++        }
++    }
++    return FALSE;
++}
++
++static WCHAR *folder_path(IShellItem *item)
++{
++    WCHAR *path = NULL;
++    if (item && FAILED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path))) path = NULL;
++    return path;
++}
++
++/* Raye's file dialog in place of this one; E_NOTIMPL when it is not shown */
++static HRESULT native_show(FileDialogImpl *This, HWND owner)
++{
++    struct native_dialog req = { 0 };
++    const WCHAR **names, **specs;
++    WCHAR *dir, *paths, *it, extbuf[MAX_PATH], *newext;
++    LPITEMIDLIST *pidls;
++    IShellFolder *desktop;
++    IShellItem *folder;
++    UINT count, i, tries;
++    HRESULT hr;
++
++    if (!native_file_dialog_enabled() || needs_own_dialog(&This->cctrls)) return E_NOTIMPL;
++
++    if (This->options & FOS_PICKFOLDERS) req.mode = NATIVE_FOLDER;
++    else if (This->dlg_type == ITEMDLG_TYPE_SAVE) req.mode = NATIVE_SAVE;
++    else if (This->options & FOS_ALLOWMULTISELECT) req.mode = NATIVE_OPEN_MULTIPLE;
++    else req.mode = NATIVE_OPEN;
++
++    names = malloc(This->filterspec_count * sizeof(WCHAR *) + 1);
++    specs = malloc(This->filterspec_count * sizeof(WCHAR *) + 1);
++    for (i = 0; i < This->filterspec_count; i++)
++    {
++        names[i] = This->filterspecs[i].pszName;
++        specs[i] = This->filterspecs[i].pszSpec;
++    }
++    req.filter_names = names;
++    req.filter_specs = specs;
++    req.filter_count = This->filterspec_count;
++    req.filter_index = This->filetypeindex + 1;
++    req.title = This->custom_title;
++    req.name = This->set_filename;
++    dir = folder_path(This->psi_setfolder ? This->psi_setfolder : This->psi_defaultfolder);
++
++    if (!GetCurrentActCtx(&This->user_actctx))
++        This->user_actctx = INVALID_HANDLE_VALUE;
++
++    /* the program may turn an answer down (OnFileOk): ask again */
++    for (tries = 0; tries < 10; tries++)
++    {
++        req.dir = dir;
++        hr = native_file_dialog(owner, &req, &paths, &count);
++        if (hr != S_OK) break;
++
++        pidls = calloc(count, sizeof(*pidls));
++        for (i = 0, it = paths; *it; it += lstrlenW(it) + 1, i++)
++        {
++            WCHAR path[MAX_PATH + 16];
++            lstrcpynW(path, it, MAX_PATH);
++            /* a name typed without an extension gets the type's one */
++            if (req.mode == NATIVE_SAVE && !*PathFindExtensionW(PathFindFileNameW(path)))
++            {
++                newext = NULL;
++                if (This->current_filter) newext = get_first_ext_from_spec(extbuf, This->current_filter);
++                if (!newext && This->default_ext && lstrlenW(This->default_ext) < 15)
++                {
++                    lstrcpyW(extbuf, L".");
++                    lstrcatW(extbuf, This->default_ext);
++                    newext = extbuf;
++                }
++                if (newext && lstrlenW(path) + lstrlenW(newext) < ARRAY_SIZE(path)) lstrcatW(path, newext);
++            }
++            pidls[i] = SHSimpleIDListFromPath(path);
++        }
++
++        if (This->psia_results)
++        {
++            IShellItemArray_Release(This->psia_results);
++            This->psia_results = NULL;
++        }
++        hr = SHGetDesktopFolder(&desktop);
++        if (SUCCEEDED(hr))
++        {
++            hr = SHCreateShellItemArray(NULL, desktop, count, (PCUITEMID_CHILD_ARRAY)pidls, &This->psia_results);
++            IShellFolder_Release(desktop);
++        }
++        for (i = 0; i < count; i++) ILFree(pidls[i]);
++        free(pidls);
++
++        /* GetFolder() after Show() is where the answer is */
++        PathRemoveFileSpecW(paths);
++        if (req.mode != NATIVE_FOLDER && SUCCEEDED(SHCreateItemFromParsingName(paths, NULL, &IID_IShellItem, (void **)&folder)))
++        {
++            if (This->psi_folder) IShellItem_Release(This->psi_folder);
++            This->psi_folder = folder;
++        }
++        CoTaskMemFree(dir);
++        dir = folder_path(This->psi_folder);
++        free(paths);
++
++        if (FAILED(hr)) break;
++        if (events_OnFileOk(This) == S_OK)
++        {
++            hr = S_OK;
++            goto done;
++        }
++        IShellItemArray_Release(This->psia_results);
++        This->psia_results = NULL;
++        hr = S_FALSE;
++    }
++    if (hr == S_FALSE) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
++
++done:
++    CoTaskMemFree(dir);
++    free(names);
++    free(specs);
++    if (This->user_actctx != INVALID_HANDLE_VALUE)
++    {
++        ReleaseActCtx(This->user_actctx);
++        This->user_actctx = INVALID_HANDLE_VALUE;
++    }
++    return hr;
++}
++
+ static HRESULT WINAPI IFileDialog2_fnShow(IFileDialog2 *iface, HWND hwndOwner)
+ {
+     FileDialogImpl *This = impl_from_IFileDialog2(iface);
++    HRESULT hr;
+     TRACE("%p (%p)\n", iface, hwndOwner);
+ 
+     This->opendropdown_has_selection = FALSE;
+ 
++    if (!This->dlg_hwnd && (hr = native_show(This, hwndOwner)) != E_NOTIMPL)
++        return hr;
+     return create_dialog(This, hwndOwner);
+ }
+ 
+diff --git a/dlls/comdlg32/nativedlg.c b/dlls/comdlg32/nativedlg.c
+new file mode 100644
+index 0000000..c67c156
+--- /dev/null
++++ b/dlls/comdlg32/nativedlg.c
+@@ -0,0 +1,335 @@
++/*
++ * Raye's file dialog for Windows programs
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++/*
++ * The Open, Save and folder dialogs are handed to raye-file-dialog, which
++ * shows the desktop's own dialog. The program's window stays disabled and
++ * keeps repainting while it is up, as with any modal dialog. When the
++ * helper is missing or cannot show anything, the caller draws the usual
++ * dialog. RAYE_FILE_DIALOG=off turns this off, any other value names the
++ * helper.
++ */
++
++#include <stdarg.h>
++#include <stdlib.h>
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winbase.h"
++#include "winternl.h"
++#include "wingdi.h"
++#include "winuser.h"
++#include "winnls.h"
++#include "commdlg.h"
++#include "shlobj.h"
++#include "shlwapi.h"
++#include "cdlg.h"
++
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(commdlg);
++
++#define HELPER "/opt/raye-wine/bin/raye-file-dialog"
++
++struct args
++{
++    char **argv;
++    int count, size;
++};
++
++static void add(struct args *a, const char *text)
++{
++    if (!text) return;
++    if (a->count + 2 > a->size)
++    {
++        a->size = a->size ? a->size * 2 : 32;
++        a->argv = realloc(a->argv, a->size * sizeof(char *));
++    }
++    a->argv[a->count++] = strdup(text);
++    a->argv[a->count] = NULL;
++}
++
++static char *to_utf8(const WCHAR *text)
++{
++    int len = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
++    char *out = malloc(len);
++    WideCharToMultiByte(CP_UTF8, 0, text, -1, out, len, NULL, NULL);
++    return out;
++}
++
++static void add_w(struct args *a, const char *key, const WCHAR *value)
++{
++    char *text;
++    if (!value || !*value) return;
++    text = to_utf8(value);
++    add(a, key);
++    add(a, text);
++    free(text);
++}
++
++/* a Windows path as Linux sees it */
++static void add_path(struct args *a, const char *key, const WCHAR *path)
++{
++    char *unix_name;
++    if (!path || !*path) return;
++    if (!(unix_name = wine_get_unix_file_name(path))) return;
++    add(a, key);
++    add(a, unix_name);
++    HeapFree(GetProcessHeap(), 0, unix_name);
++}
++
++static void free_args(struct args *a)
++{
++    int i;
++    for (i = 0; i < a->count; i++) free(a->argv[i]);
++    free(a->argv);
++}
++
++BOOL native_file_dialog_enabled(void)
++{
++    WCHAR value[8];
++    DWORD len = GetEnvironmentVariableW(L"RAYE_FILE_DIALOG", value, ARRAY_SIZE(value));
++    if (len && len < ARRAY_SIZE(value) && (!wcsicmp(value, L"off") || !wcscmp(value, L"0")))
++        return FALSE;
++    return TRUE;
++}
++
++static char *helper_path(void)
++{
++    WCHAR value[MAX_PATH];
++    DWORD len = GetEnvironmentVariableW(L"RAYE_FILE_DIALOG", value, ARRAY_SIZE(value));
++    if (len && len < ARRAY_SIZE(value) && value[0] == '/') return to_utf8(value);
++    return strdup(HELPER);
++}
++
++struct spawn
++{
++    char **argv;
++    NTSTATUS status;
++};
++
++static DWORD WINAPI spawn_thread(void *arg)
++{
++    struct spawn *s = arg;
++    s->status = __wine_unix_spawnvp(s->argv, TRUE);
++    return 0;
++}
++
++/* runs the helper; the program's own windows keep getting their messages */
++static NTSTATUS run_helper(HWND owner, char **argv)
++{
++    struct spawn s = { argv, STATUS_UNSUCCESSFUL };
++    HWND top = owner ? GetAncestor(owner, GA_ROOT) : NULL;
++    BOOL disabled = FALSE, quit = FALSE;
++    WPARAM quit_code = 0;
++    HANDLE thread;
++    MSG msg;
++
++    if (!(thread = CreateThread(NULL, 0, spawn_thread, &s, 0, NULL))) return STATUS_UNSUCCESSFUL;
++    if (top && IsWindowEnabled(top))
++    {
++        EnableWindow(top, FALSE);
++        disabled = TRUE;
++    }
++    while (MsgWaitForMultipleObjects(1, &thread, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)
++    {
++        while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
++        {
++            if (msg.message == WM_QUIT)
++            {
++                quit = TRUE;
++                quit_code = msg.wParam;
++                continue;
++            }
++            TranslateMessage(&msg);
++            DispatchMessageW(&msg);
++        }
++    }
++    CloseHandle(thread);
++    if (disabled) EnableWindow(top, TRUE);
++    if (top) SetForegroundWindow(top);
++    if (quit) PostQuitMessage(quit_code);
++    return s.status;
++}
++
++/* Documents, Pictures... of the space are links to the person's own
++ * folders. Linux paths come back from the dialog; inside one of those
++ * folders they are given to the program through the link, so it sees
++ * C:\users\<name>\Documents\... and not the drive of the whole system. */
++struct place
++{
++    char *unix_name;
++    WCHAR dos[MAX_PATH];
++};
++
++static unsigned int get_places(struct place *places, unsigned int max)
++{
++    static const int ids[] = { CSIDL_PERSONAL, CSIDL_MYPICTURES, CSIDL_MYMUSIC, CSIDL_MYVIDEO, CSIDL_DESKTOPDIRECTORY };
++    unsigned int i, n = 0;
++    WCHAR *known;
++
++    for (i = 0; i < ARRAY_SIZE(ids) && n < max; i++)
++        if (SHGetFolderPathW(NULL, ids[i], NULL, SHGFP_TYPE_CURRENT, places[n].dos) == S_OK &&
++            (places[n].unix_name = wine_get_unix_file_name(places[n].dos)))
++            n++;
++    if (n < max && SHGetKnownFolderPath(&FOLDERID_Downloads, 0, NULL, &known) == S_OK)
++    {
++        lstrcpynW(places[n].dos, known, MAX_PATH);
++        if ((places[n].unix_name = wine_get_unix_file_name(known))) n++;
++        CoTaskMemFree(known);
++    }
++    return n;
++}
++
++static WCHAR *dos_name(const char *path, const struct place *places, unsigned int count)
++{
++    unsigned int i, best = count;
++    size_t len, best_len = 0;
++    WCHAR *out, *p;
++    int rest;
++
++    for (i = 0; i < count; i++)
++    {
++        len = strlen(places[i].unix_name);
++        if (len > best_len && !strncmp(path, places[i].unix_name, len) && (path[len] == '/' || !path[len]))
++        {
++            best = i;
++            best_len = len;
++        }
++    }
++    if (best == count) return wine_get_dos_file_name(path);
++
++    rest = MultiByteToWideChar(CP_UTF8, 0, path + best_len, -1, NULL, 0);
++    out = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(places[best].dos) + rest) * sizeof(WCHAR));
++    lstrcpyW(out, places[best].dos);
++    p = out + lstrlenW(out);
++    MultiByteToWideChar(CP_UTF8, 0, path + best_len, -1, p, rest);
++    for (; *p; p++) if (*p == '/') *p = '\\';
++    return out;
++}
++
++static WCHAR *read_answer(const WCHAR *file, UINT *count, const struct place *places, unsigned int place_count)
++{
++    HANDLE h = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
++    DWORD size, got = 0;
++    char *text, *line, *next;
++    WCHAR *out = NULL, *dos;
++    size_t used = 0;
++
++    *count = 0;
++    if (h == INVALID_HANDLE_VALUE) return NULL;
++    size = GetFileSize(h, NULL);
++    if (size == INVALID_FILE_SIZE || size > 1 << 20)
++    {
++        CloseHandle(h);
++        return NULL;
++    }
++    text = malloc(size + 1);
++    ReadFile(h, text, size, &got, NULL);
++    CloseHandle(h);
++    text[got] = 0;
++
++    out = malloc(sizeof(WCHAR));
++    for (line = text; line && *line; line = next)
++    {
++        if ((next = strchr(line, '\n'))) *next++ = 0;
++        if (line[0] != '/' || !(dos = dos_name(line, places, place_count))) continue;
++        out = realloc(out, (used + lstrlenW(dos) + 2) * sizeof(WCHAR));
++        lstrcpyW(out + used, dos);
++        used += lstrlenW(dos) + 1;
++        (*count)++;
++        HeapFree(GetProcessHeap(), 0, dos);
++    }
++    out[used] = 0;
++    free(text);
++    if (!*count)
++    {
++        free(out);
++        return NULL;
++    }
++    return out;
++}
++
++HRESULT native_file_dialog(HWND owner, const struct native_dialog *req, WCHAR **paths, UINT *count)
++{
++    static const char *modes[] = { "open", "open-multiple", "save", "folder" };
++    WCHAR temp_dir[MAX_PATH], temp_file[MAX_PATH], buf[32];
++    struct args a = { 0 };
++    struct place places[8];
++    unsigned int place_count;
++    char *helper, *item;
++    HANDLE window;
++    NTSTATUS status;
++    UINT i;
++
++    *paths = NULL;
++    *count = 0;
++    if (!GetTempPathW(ARRAY_SIZE(temp_dir), temp_dir) || !GetTempFileNameW(temp_dir, L"rfd", 0, temp_file))
++        return E_NOTIMPL;
++
++    helper = helper_path();
++    add(&a, helper);
++    free(helper);
++    add(&a, "--mode");
++    add(&a, modes[req->mode]);
++    add_path(&a, "--out", temp_file);
++    add_w(&a, "--title", req->title);
++    add_path(&a, "--dir", req->dir);
++    add_w(&a, "--name", req->name);
++    for (i = 0; i < req->filter_count; i++)
++    {
++        WCHAR *pair;
++        if (!req->filter_names[i] || !req->filter_specs[i]) continue;
++        pair = malloc((lstrlenW(req->filter_names[i]) + lstrlenW(req->filter_specs[i]) + 2) * sizeof(WCHAR));
++        lstrcpyW(pair, req->filter_names[i]);
++        lstrcatW(pair, L"|");
++        lstrcatW(pair, req->filter_specs[i]);
++        item = to_utf8(pair);
++        add(&a, "--filter");
++        add(&a, item);
++        free(item);
++        free(pair);
++    }
++    if (req->filter_count)
++    {
++        swprintf(buf, ARRAY_SIZE(buf), L"%u", req->filter_index);
++        add_w(&a, "--filter-index", buf);
++    }
++    if (owner && (window = GetPropW(GetAncestor(owner, GA_ROOT), L"__wine_x11_whole_window")))
++    {
++        swprintf(buf, ARRAY_SIZE(buf), L"%lu", (unsigned long)(ULONG_PTR)window);
++        add_w(&a, "--parent", buf);
++    }
++    status = run_helper(owner, a.argv);
++    free_args(&a);
++    TRACE("helper answered %#lx\n", status);
++
++    if (status == 0)
++    {
++        place_count = get_places(places, ARRAY_SIZE(places));
++        *paths = read_answer(temp_file, count, places, place_count);
++        while (place_count--) HeapFree(GetProcessHeap(), 0, places[place_count].unix_name);
++    }
++    DeleteFileW(temp_file);
++    if (status == 0 && *paths) return S_OK;
++    if (status == 1 || status == 0) return S_FALSE;
++    return E_NOTIMPL;
++}

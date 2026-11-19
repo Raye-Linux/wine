@@ -27,13 +27,16 @@ devices=$(grep -n -i -E '"[^"]*\bwine\b' dlls/dinput/mouse.c dlls/dinput/keyboar
     dlls/mcicda/mcicda.c dlls/mciwave/mciwave.c dlls/mciavi32/wnd.c dlls/mciavi32/info.c \
     dlls/mmsystem.dll16/driver.c dlls/ddraw/ddraw.c dlls/msvcrt/exit.c dlls/winealsa.drv/alsamidi.c |
     grep -v -E ':[0-9]+:#include|WINE_(TRACE|ERR|WARN|FIXME)|\b(TRACE|ERR|WARN|FIXME)\(')
-wmi=$(grep -Hn -E 'L"Wine (Audio Device|Disk Drive|disk|CD_ROM)' dlls/wbemprox/builtin.c)
+wmi=$(grep -Hn -E 'L"Wine (Audio Device|Disk Drive|disk|CD_ROM)|L"The Wine Project"|L"Wine"' dlls/wbemprox/builtin.c)
+# device names and makers in the bus drivers' installation files; the
+# hardware IDs (root\winebus, WINEBUS\WINE_COMP_HID) are not names
+infs=$(grep -Hn -E '^(Wine[ =]|(Description|DisplayName)="Wine )' dlls/*/*.inf)
 
 loader=$(grep -n -E '^(Name|GenericName|Comment)(\[[^]]*\])?=.*Wine' loader/wine.desktop)
 
-if [ -n "$found$titles$devices$wmi$loader" ]; then
+if [ -n "$found$titles$devices$wmi$infs$loader" ]; then
     echo "check-names: the project name is still visible here:" >&2
-    printf '%s\n' "$found" "$titles" "$devices" "$wmi" "$loader" | grep -v '^$' | sed 's/^/  /' >&2
+    printf '%s\n' "$found" "$titles" "$devices" "$wmi" "$infs" "$loader" | grep -v '^$' | sed 's/^/  /' >&2
     exit 1
 fi
 echo "check-names: no user-visible project name left"

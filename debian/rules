@@ -75,6 +75,8 @@ override_dh_auto_install:
 	install -D -m 644 capture/libraye-capture.so.1 $(STAGE)/usr/lib/$(DEB_HOST_MULTIARCH)/libraye-capture.so.1
 	install -D -m 755 capture/raye-capture-probe $(STAGE)$(PREFIX)/bin/raye-capture-probe
 	install -m 755 build/raye-wine-gpu $(STAGE)$(PREFIX)/bin/
+	# the file dialog comdlg32 hands Open and Save to
+	install -m 755 release/windows/raye-file-dialog $(STAGE)$(PREFIX)/bin/
 	install -D -m 644 release/pipewire/50-raye-rates.conf \
 		$(STAGE)/usr/share/pipewire/pipewire.conf.d/50-raye-rates.conf
 	rm -rf $(STAGE)$(PREFIX)/share/man $(STAGE)$(PREFIX)/include

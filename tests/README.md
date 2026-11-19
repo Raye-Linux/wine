@@ -18,6 +18,7 @@ Run by `build.sh` before it builds anything, and by
 | `test_fonts.py` | 12 | font names programs ask for map to fonts Raye ships; MS Sans Serif to Tahoma |
 | `test_package.py` | 25 | Store packages (.msix, .appx, bundles): what runs, what is refused, safe unpacking |
 | `test_proton_parity.py` | 4 | WINE_LARGE_ADDRESS_AWARE gives 32-bit programs 4 GB |
+| `test_file_dialog.py` | 30 | Open, Save and folder dialogs go to the desktop's own dialog; when the old one stays |
 
 ## The gaps, named
 
@@ -39,6 +40,13 @@ a failure would look like if it happened.
   gets (Courier New must come back monospace, MS Sans Serif not as a
   bitmap), and `laa-check32.exe` with WINE_LARGE_ADDRESS_AWARE=1 must say
   4095 MB.
+- **What a program sees of the computer.** `test_bridge.py` reads the
+  patches; `tests/samples/hw-check.exe` lists screens, GPUs, sound and
+  microphones, MIDI ports, game controllers, cameras, printers, COM ports,
+  drives and network adapters the way a program sees them, and
+  `deps-check.exe` / `deps-check32.exe` say which Windows pieces (D3DX,
+  XAudio2, XInput, MSXML, VB6, MFC, OpenAL, PhysX, .NET) load in a space.
+  Both need a real PC for gamepads, MIDI and cameras.
 - **`audio/measure.sh`** and the Direct3D / sound sample programs under
   `tests/samples/`: by hand, in the test VM, per the app list in
   the design notes of the iso repository.

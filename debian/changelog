@@ -4,6 +4,11 @@ raye-wine (11.21-1~raye7) resolute; urgency=medium
     when they see the layer's version can be told not to see it.
   * Checked settings for 14 more Windows programs; FL Studio and Affinity
     marked as partly working.
+  * Windows programs open and save files with Raye's own dialog, starting
+    in Documents, and folders like Documents keep their usual names in the
+    program.
+  * System information tools show Windows device names, and a USB serial
+    adapter is COM1 instead of COM33.
 
  -- techoraye <190692880+techoraye@users.noreply.github.com>  Thu, 19 Nov 2026 17:00:00 +0000
 

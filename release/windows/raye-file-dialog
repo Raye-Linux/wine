@@ -1,0 +1,163 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""The file dialog a Windows program gets when it asks for a file or a
+folder: Raye's own (kdialog, the dialog of the desktop), in place of the
+one the layer draws. comdlg32 calls this and waits.
+
+    raye-file-dialog --mode open|open-multiple|save|folder --out FILE
+                     [--title T] [--dir D] [--name N] [--parent XID]
+                     [--filter 'Text files|*.txt;*.log']... [--filter-index N]
+
+--dir is the program's folder as seen from Linux. The dialog never opens
+inside the space itself (C:\\Program Files and the like): it opens in
+Documents then.
+
+Exit status: 0 the chosen paths are in FILE, one per line; 1 cancelled;
+2 bad call; 3 no dialog could be shown (the layer then draws its own).
+"""
+import os
+import subprocess
+import sys
+
+MODES = {
+    "open": ["--getopenfilename"],
+    "open-multiple": ["--multiple", "--separate-output", "--getopenfilename"],
+    "save": ["--getsavefilename"],
+    "folder": ["--getexistingdirectory"],
+}
+
+
+# what Windows calls the dialog when the program gives no title
+TITLES = {
+    "open": ("Open", "Ouvrir"),
+    "open-multiple": ("Open", "Ouvrir"),
+    "save": ("Save As", "Enregistrer sous"),
+    "folder": ("Select Folder", "Sélectionner un dossier"),
+}
+
+
+def french():
+    for key in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(key)
+        if value:
+            return value.startswith("fr")
+    return False
+
+
+def qt_filter(filters, index):
+    """'Name|*.a;*.b' items, Windows style, as a Qt filter list. kdialog
+    cannot preselect a filter, so the program's choice goes first."""
+    lines = []
+    for item in filters:
+        name, _, spec = item.partition("|")
+        name = " ".join(name.replace("|", " ").replace(";;", ";").split())
+        spec = spec.split("|")[-1]
+        globs = [g.strip() for g in spec.replace("\n", ";").split(";") if g.strip()]
+        globs = ["*" if g in ("*.*", "*") else g for g in globs if "(" not in g and ")" not in g] or ["*"]
+        lines.append(f"{name or '*'} ({' '.join(globs)})")
+    if 1 <= index <= len(lines):
+        lines.insert(0, lines.pop(index - 1))
+    return ";;".join(lines)
+
+
+def documents(home):
+    try:
+        with open(os.path.join(home, ".config", "user-dirs.dirs"), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("XDG_DOCUMENTS_DIR="):
+                    path = line.split("=", 1)[1].strip().strip('"').replace("$HOME", home)
+                    if os.path.isdir(path):
+                        return path
+    except OSError:
+        pass
+    path = os.path.join(home, "Documents")
+    return path if os.path.isdir(path) else home
+
+
+def start_folder(folder, home):
+    """Where the dialog opens: the real folder behind the program's one,
+    never a folder of the space itself."""
+    if folder:
+        real = os.path.realpath(folder)
+        if os.path.isdir(real) and "/drive_c" not in real and not real.endswith("/drive_c"):
+            return real
+    return documents(home)
+
+
+def parse(argv):
+    opts = {"mode": None, "title": "", "dir": "", "name": "", "parent": "", "out": None,
+            "filter": [], "filter-index": 1}
+    i = 0
+    while i < len(argv):
+        key = argv[i][2:] if argv[i].startswith("--") else None
+        if key not in opts or i + 1 >= len(argv):
+            return None
+        value = argv[i + 1]
+        if isinstance(opts[key], list):
+            opts[key].append(value)
+        elif key == "filter-index":
+            opts[key] = int(value) if value.isdigit() else 1
+        else:
+            opts[key] = value
+        i += 2
+    if opts["mode"] not in MODES or not opts["out"]:
+        return None
+    return opts
+
+
+def main(argv):
+    opts = parse(argv)
+    if opts is None:
+        print("usage: raye-file-dialog --mode open|open-multiple|save|folder --out FILE ...", file=sys.stderr)
+        return 2
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return 3
+    home = os.path.expanduser("~")
+    start = start_folder(opts["dir"], home)
+    if opts["mode"] == "save" and opts["name"]:
+        # only a name: a program cannot point the dialog anywhere with it
+        name = opts["name"].replace("\\", "/").rsplit("/", 1)[-1]
+        if name not in ("", ".", ".."):
+            start = os.path.join(start, name)
+    title = opts["title"] or TITLES[opts["mode"]][1 if french() else 0]
+    cmd = ["kdialog", "--title", title]
+    env = dict(os.environ)
+    if opts["parent"].isdigit() and os.environ.get("DISPLAY"):
+        cmd += ["--attach", opts["parent"]]
+        # the program's window is an X11 one; the dialog stays on top of it
+        # only when it is one too
+        env["QT_QPA_PLATFORM"] = "xcb"
+    cmd += MODES[opts["mode"]] + [start]
+    if opts["mode"] != "folder":
+        flt = qt_filter(opts["filter"], opts["filter-index"])
+        if flt:
+            cmd.append(flt)
+    parent = os.getppid()
+    try:
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return 3
+    # the program that asked may end meanwhile: its dialog goes with it
+    while True:
+        try:
+            out, _ = proc.communicate(timeout=1)
+            break
+        except subprocess.TimeoutExpired:
+            if os.getppid() != parent:
+                proc.kill()
+                proc.wait()
+                return 1
+    if proc.returncode == 1:
+        return 1
+    if proc.returncode != 0:
+        return 3
+    paths = [p for p in out.split("\n") if p.startswith("/")]
+    if not paths:
+        return 1
+    with open(opts["out"], "w", encoding="utf-8") as f:
+        f.write("".join(p + "\n" for p in paths))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

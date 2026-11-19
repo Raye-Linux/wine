@@ -5,7 +5,7 @@ CC32 = i686-w64-mingw32-gcc
 CFLAGS = -O2 -Wall
 PROGRAMS = d3d11-triangle.exe d3d12-clear.exe sound-check.exe crash.exe d2d1-effect.exe \
            runtimes-check.exe runtimes-check32.exe midi-in.exe child-focus.exe \
-           fontprobe.exe laa-check32.exe
+           fontprobe.exe laa-check32.exe hw-check.exe hw-check32.exe deps-check.exe deps-check32.exe dialog-probe.exe dialog-probe32.exe
 
 all: $(PROGRAMS)
 
@@ -38,6 +38,27 @@ fontprobe.exe: fontprobe.c
 
 laa-check32.exe: laa-check.c
 	$(CC32) $(CFLAGS) -Wl,--disable-large-address-aware -o $@ $<
+
+dialog-probe.exe: dialog-probe.c
+	$(CC) $(CFLAGS) -o $@ $< -lcomdlg32 -lole32 -luuid
+
+dialog-probe32.exe: dialog-probe.c
+	$(CC32) $(CFLAGS) -o $@ $< -lcomdlg32 -lole32 -luuid
+
+HW_LIBS = -lole32 -loleaut32 -lwinmm -luuid -ldxgi -ld3d9 -ldinput8 -ldxguid -lxinput \
+          -lmfplat -lmf -lmfuuid -lstrmiids -lsetupapi -liphlpapi -lws2_32 -lwinspool
+
+hw-check.exe: hw-check.c
+	$(CC) $(CFLAGS) -o $@ $< $(HW_LIBS)
+
+hw-check32.exe: hw-check.c
+	$(CC32) $(CFLAGS) -o $@ $< $(HW_LIBS)
+
+deps-check.exe: deps-check.c
+	$(CC) $(CFLAGS) -o $@ $< -lole32 -luuid
+
+deps-check32.exe: deps-check.c
+	$(CC32) $(CFLAGS) -o $@ $< -lole32 -luuid
 
 crash.exe: crash.c
 	$(CC) $(CFLAGS) -mwindows -o $@ $<

@@ -67,9 +67,11 @@ class Profile(unittest.TestCase):
 
 
 class Patch(unittest.TestCase):
-    def test_is_applied_last_in_base(self):
+    def test_is_applied_after_the_older_base_patches(self):
         series = [l for l in (PATCHES / "series").read_text().splitlines() if l and not l.startswith("#")]
-        self.assertEqual(series[-1], PATCH)
+        older = [p for p in series if p < PATCH]
+        self.assertEqual(series[:len(older)], older)
+        self.assertEqual(series[len(older)], PATCH)
 
     def test_hides_the_three_exports_from_getprocaddress(self):
         code = added("dlls/ntdll/loader.c")

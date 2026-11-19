@@ -1,0 +1,56 @@
+Subject: mountmgr: only list serial ports that have a chip behind them
+
+Every /dev/ttyS node became a COM port, chip or not, so with the 32
+empty ttyS nodes most kernels make a USB serial adapter landed on COM33.
+List only the ports that exist, and keep looking past a gap.
+---
+diff --git a/dlls/mountmgr.sys/unixlib.c b/dlls/mountmgr.sys/unixlib.c
+--- a/dlls/mountmgr.sys/unixlib.c
++++ b/dlls/mountmgr.sys/unixlib.c
+@@ -123,18 +123,42 @@
+ #endif
+ }
+ 
++/* The kernel makes a ttyS node for every possible 8250 port (32 on most
++ * distributions), with or without a chip behind it. Windows only lists the
++ * ports that exist, so a USB adapter is COM1-COM4 there, not COM33. */
++static BOOL is_empty_uart( const char *unix_path )
++{
++#ifdef linux
++    char sys_path[64], type[16];
++    int fd, len;
++
++    if (strncmp( unix_path, "/dev/ttyS", 9 )) return FALSE;
++    snprintf( sys_path, sizeof(sys_path), "/sys/class/tty/%s/type", unix_path + 5 );
++    if ((fd = open( sys_path, O_RDONLY )) < 0) return FALSE;
++    len = read( fd, type, sizeof(type) - 1 );
++    close( fd );
++    if (len <= 0) return FALSE;
++    type[len] = 0;
++    return atoi( type ) == 0;  /* PORT_UNKNOWN */
++#else
++    return FALSE;
++#endif
++}
++
+ static void detect_devices( const char **paths, char *names, ULONG size )
+ {
+     while (*paths)
+     {
+         char unix_path[32];
+-        unsigned int i = 0;
++        unsigned int i;
+ 
+-        for (;;)
++        /* a gap is normal: ttyUSB0 unplugged leaves ttyUSB1 alone */
++        for (i = 0; i < 64; i++)
+         {
+-            int len = snprintf( unix_path, sizeof(unix_path), *paths, i++ );
++            int len = snprintf( unix_path, sizeof(unix_path), *paths, i );
+             if (len + 2 > size) break;
+-            if (access( unix_path, F_OK ) != 0) break;
++            if (access( unix_path, F_OK ) != 0) continue;
++            if (is_empty_uart( unix_path )) continue;
+             strcpy( names, unix_path );
+             names += len + 1;
+             size -= len + 1;
