@@ -4,6 +4,7 @@ raye-wine (11.21-1~raye5) resolute; urgency=medium
     New, Segoe UI...), MS Sans Serif text is smooth, 32-bit games can use
     4 GB, DLSS frame generation on NVIDIA, and Microsoft Store packages
     open or say plainly why they can't.
+  * Affinity and TikTok LIVE Studio get their own settings.
 
  -- techoraye <190692880+techoraye@users.noreply.github.com>  Thu, 19 Nov 2026 05:00:00 +0000
 

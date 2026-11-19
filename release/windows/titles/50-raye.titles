@@ -150,3 +150,36 @@ profile   =
 why_en    = Installs, plays sound and uninstalls here, but no video has been tried yet; VLC for Raye, in the Store, is the one to use.
 why_fr    = S'installe, joue le son et se désinstalle ici, mais aucune vidéo n'a encore été essayée ; VLC pour Raye, dans le Store, est celle à prendre.
 source    = measured 2026-11-11 in the test VM (raye-wine 11.21, no graphics card): vlc-3.0.24-win64.exe by double-click ("Windows" chosen), Start entries, an .oga played as a PipeWire stream, uninstalled by raye-windows uninstall (rc 0); a video player that has played no video is not marked works
+
+[fl-studio]
+name      = FL Studio
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 3100
+profile   =
+why_en    = Installs and opens here, with its own plugins and the ones you add; sound has not been checked on a real PC yet.
+why_fr    = S'installe et s'ouvre ici, avec ses extensions et celles que vous ajoutez ; le son n'a pas encore été vérifié sur un vrai PC.
+source    = measured 2026-11-19 in the agents' chroot (raye-wine 11.21-1~raye5, Xvfb, no sound server, software Vulkan): flstudio_win64_26.1.7.5654.exe /S installs in 243 s (3.5 GB with Edge WebView2), FL64 opens in 9 s, the "What's new" demo loads every plugin DLL; with no sound server "FL Studio ASIO" shows GetDefaultAudioEndpoint failed at start
+
+[affinity]
+name      = Affinity
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 2700
+profile   = affinity
+why_en    = Installs, opens and draws documents here; signing in to Canva does not work yet, so its Canva features are missing.
+why_fr    = S'installe, s'ouvre et dessine des documents ici ; la connexion à Canva ne marche pas encore, donc ses fonctions Canva manquent.
+source    = measured 2026-11-19 in the agents' chroot (raye-wine 11.21-1~raye5, dotnet48 + win11, no GPU): downloads.affinity.studio "Affinity x64.exe" (Affinity 3.3.3.5004) installs through its own window in about 2 min, Affinity.exe opens in 15 s, an A4 document takes a rectangle; Direct3D on DXVK (software Vulkan) crashed at the first document, on the built-in renderer it works; AffinityOnLinux (seapear) lists Canva sign-in as broken
+
+[tiktok-live-studio]
+name      = TikTok LIVE Studio
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 900
+profile   = tiktok-live-studio
+why_en    = TikTok gives its installer only to signed-in accounts, so it has not been tried here yet.
+why_fr    = TikTok ne donne son installateur qu'aux comptes connectés : il n'a donc pas encore été essayé ici.
+source    = tiktok.com/studio/download (read 2026-11-19) serves the setup only after sign-in; discuss.cachyos.org/t/tiktok-studio-using-umu/30647 (read 2026-11-19): tiktok_live_studio_downloader-v0.0.1-wid-*.exe installs and opens on Proton, its sound devices list stays empty; codeweavers.com lists it as limited functionality
