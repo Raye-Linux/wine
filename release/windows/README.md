@@ -19,12 +19,12 @@ REPLACES                    the one profile raye-base also has a file for
 | `state` | what **Raye** verified, on a real machine, on a day | a person, after playing it |
 | `upstream` | what the **publisher** did about Linux | the generator, from a dated list |
 
-`state` is one of four words: `works`, `offline-only`, `blocked`,
-`untested`. `upstream` is one of `runtime-enabled`, `refused`, `none`,
+`state` is one of five words: `works`, `offline-only`, `partial`,
+`blocked`, `untested`. `upstream` is one of `runtime-enabled`, `refused`, `none`,
 `unknown`.
 
-**`works` and `offline-only` are refused without `tested_on` and
-`tested_at`.** `tests/test_titles.py` fails the build otherwise. A
+**`works`, `offline-only` and `partial` are refused without `tested_on`
+and `tested_at`.** `tests/test_titles.py` fails the build otherwise. A
 launcher that opened is not a game that played, and the one failure mode
 this whole mechanism exists to prevent is a confident green in front of a
 download that cannot work.

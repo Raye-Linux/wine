@@ -43,7 +43,7 @@ PROFILES = "/usr/share/raye/windows-profiles"
 # Every state word, and whether it is a positive claim about this system.
 # A positive claim is one a user acts on, so it carries a machine and a
 # date; the rest do not need one.
-STATES = {"works": True, "offline-only": True, "blocked": False, "untested": False}
+STATES = {"works": True, "offline-only": True, "partial": True, "blocked": False, "untested": False}
 FIELDS = ("name", "state", "upstream", "anticheat", "size_mb", "profile",
           "why_en", "why_fr", "source", "tested_on", "tested_at")
 

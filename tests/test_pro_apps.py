@@ -67,14 +67,20 @@ class LiveStudio(unittest.TestCase):
 
 
 class Titles(unittest.TestCase):
-    def test_nothing_is_claimed_before_a_real_pc(self):
+    def test_no_more_is_claimed_than_was_measured(self):
         t = titles()
         for tid in ("fl-studio", "affinity", "tiktok-live-studio"):
             with self.subTest(tid):
                 self.assertIn(tid, t)
-                self.assertEqual(t[tid]["state"], "untested")
                 self.assertTrue(t[tid]["why_en"].strip() and t[tid]["why_fr"].strip())
                 self.assertNotRegex(t[tid]["why_en"] + t[tid]["why_fr"], r"(?i)\bwine\b")
+        # nobody got TikTok's installer; FL Studio and Affinity open and do
+        # their job here, but not all of it
+        self.assertEqual(t["tiktok-live-studio"]["state"], "untested")
+        for tid in ("fl-studio", "affinity"):
+            with self.subTest(tid):
+                self.assertEqual(t[tid]["state"], "partial")
+                self.assertRegex(t[tid].get("tested_at", ""), r"^\d{4}-\d\d-\d\d$")
 
 
 if __name__ == "__main__":

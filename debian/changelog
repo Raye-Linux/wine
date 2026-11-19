@@ -1,3 +1,12 @@
+raye-wine (11.21-1~raye7) resolute; urgency=medium
+
+  * rekordbox gets its own settings, and programs that refuse to start
+    when they see the layer's version can be told not to see it.
+  * Checked settings for 14 more Windows programs; FL Studio and Affinity
+    marked as partly working.
+
+ -- techoraye <190692880+techoraye@users.noreply.github.com>  Thu, 19 Nov 2026 17:00:00 +0000
+
 raye-wine (11.21-1~raye6) resolute; urgency=medium
 
   * Affinity and TikTok LIVE Studio get their own settings.

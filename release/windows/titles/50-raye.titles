@@ -26,10 +26,13 @@
 #              works         played here, start to finish
 #              offline-only  the solo or training side plays here, the
 #                            online side does not
+#              partial       opens here and does part of its job;
+#                            why_en/why_fr say what does not work
 #              blocked       refused here, and the reason is not a bug
 #                            we can fix
 #              untested      nobody has played it here
-#              ⚠️ works and offline-only REQUIRE tested_on and tested_at.
+#              ⚠️ works, offline-only and partial REQUIRE tested_on and
+#              tested_at.
 #              A launcher that opened is not a game that played.
 #
 #   upstream   what the PUBLISHER has done, with a source and a date.
@@ -153,25 +156,29 @@ source    = measured 2026-11-11 in the test VM (raye-wine 11.21, no graphics car
 
 [fl-studio]
 name      = FL Studio
-state     = untested
+state     = partial
 upstream  = none
 anticheat = none
 size_mb   = 3100
 profile   =
-why_en    = Installs and opens here, with its own plugins and the ones you add; sound has not been checked on a real PC yet.
-why_fr    = S'installe et s'ouvre ici, avec ses extensions et celles que vous ajoutez ; le son n'a pas encore été vérifié sur un vrai PC.
-source    = measured 2026-11-19 in the agents' chroot (raye-wine 11.21-1~raye5, Xvfb, no sound server, software Vulkan): flstudio_win64_26.1.7.5654.exe /S installs in 243 s (3.5 GB with Edge WebView2), FL64 opens in 9 s, the "What's new" demo loads every plugin DLL; with no sound server "FL Studio ASIO" shows GetDefaultAudioEndpoint failed at start
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, PipeWire with a null output
+tested_at = 2026-11-19
+why_en    = Installs quietly and opens with its sound output ready; one plugin of its 2026 demo won't open, and Raye ASIO is not confirmed yet.
+why_fr    = S'installe sans fenêtre et s'ouvre avec sa sortie son prête ; une extension de sa démo 2026 ne s'ouvre pas, et Raye ASIO n'est pas encore confirmé.
+source    = measured 2026-11-19 in the agents' chroot: flstudio_win64_26.1.7.5654.exe (sha256 as pinned) /S in 242 s (exit 199, 3 GB in place), FL64 opens; with PipeWire + WirePlumber running, Options > Audio shows "FL Studio ASIO: Open at 44100Hz", no error box (the "GetDefaultAudioEndpoint failed" box only comes with no sound server at all); the "What's new" demo says "1 plugin(s) could not be opened" and its list draws no name; Raye ASIO on a graph allowing only 48 kHz refused 44.1 kHz, with Raye's 50-raye-rates.conf the choice could not be repeated (no window manager to reach the settings again); earlier: Sytrus plays, Surge XT loads (2026-11-12)
 
 [affinity]
 name      = Affinity
-state     = untested
+state     = partial
 upstream  = none
 anticheat = none
 size_mb   = 2700
 profile   = affinity
-why_en    = Installs, opens and draws documents here; signing in to Canva does not work yet, so its Canva features are missing.
-why_fr    = S'installe, s'ouvre et dessine des documents ici ; la connexion à Canva ne marche pas encore, donc ses fonctions Canva manquent.
-source    = measured 2026-11-19 in the agents' chroot (raye-wine 11.21-1~raye5, dotnet48 + win11, no GPU): downloads.affinity.studio "Affinity x64.exe" (Affinity 3.3.3.5004) installs through its own window in about 2 min, Affinity.exe opens in 15 s, an A4 document takes a rectangle; Direct3D on DXVK (software Vulkan) crashed at the first document, on the built-in renderer it works; AffinityOnLinux (seapear) lists Canva sign-in as broken
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5, its standard space with the affinity profile (.NET 4.8, Windows 11), on a virtual screen with no graphics card
+tested_at = 2026-11-19
+why_en    = Installs through its own window, opens and draws documents here; signing in to Canva does not work yet, so its Canva features are missing.
+why_fr    = S'installe par sa propre fenêtre, s'ouvre et dessine des documents ici ; la connexion à Canva ne marche pas encore, donc ses fonctions Canva manquent.
+source    = measured 2026-11-19 (twice, same build): downloads.affinity.studio "Affinity x64.exe" (sha256 618f7b18..., Affinity 3.3.3.5004) after winetricks remove_mono dotnet48 win11 (359 s); its setup first says "not recommended: a native installer exists for this CPU type", Ignore, Install, "Setup completed successfully" (1.8 GB); Affinity.exe opens to its Welcome page, a new A4 document takes a rectangle ("Add Rectangle" in History) on the built-in renderer; DXVK on software Vulkan crashed at the first document; AffinityOnLinux (seapear) lists Canva sign-in as broken; pen tablet and colour profiles not working
 
 [tiktok-live-studio]
 name      = TikTok LIVE Studio
@@ -183,3 +190,194 @@ profile   = tiktok-live-studio
 why_en    = TikTok gives its installer only to signed-in accounts, so it has not been tried here yet.
 why_fr    = TikTok ne donne son installateur qu'aux comptes connectés : il n'a donc pas encore été essayé ici.
 source    = tiktok.com/studio/download (read 2026-11-19) serves the setup only after sign-in; discuss.cachyos.org/t/tiktok-studio-using-umu/30647 (read 2026-11-19): tiktok_live_studio_downloader-v0.0.1-wid-*.exe installs and opens on Proton, its sound devices list stays empty; codeweavers.com lists it as limited functionality
+
+[rekordbox]
+name      = rekordbox
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 1900
+profile   = rekordbox
+why_en    = Installs and opens to its sign-in here; your library, track analysis and sound have not been checked yet.
+why_fr    = S'installe et s'ouvre sur sa connexion ici ; la bibliothèque, l'analyse des morceaux et le son n'ont pas encore été vérifiés.
+source    = measured 2026-11-19 in the agents' chroot (raye-wine 11.21-1~raye5, Xvfb, no GPU, no sound server): cdn.rekordbox.com Install_rekordbox_x64_7_2_20.zip (sha256 as winget AlphaTheta.rekordbox 7.2.20.0354), its setup with /S /Lang=ENGLISH installs in 94 s (1.3 GB), rekordbox.exe opens its AlphaTheta sign-in in 4 s, a wrong password gets "incorrect" back from AlphaTheta with and without base/0020 (ntdll rebuilt from the raye5 tree); no account here, so nothing past sign-in was tried; erhan.es says it stalls at registration unless the version exports are hidden
+
+[faststone]
+name      = FastStone Image Viewer
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 35
+profile   = faststone
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly, opens and shows your pictures here.
+why_fr    = S'installe sans fenêtre, s'ouvre et affiche vos images ici.
+source    = measured 2026-11-19: FSViewerSetup85.exe /S in 4 s (33 MB), FSViewer.exe opens in 2 s and shows a test JPEG passed on its command line
+
+[mp3tag]
+name      = Mp3tag
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 30
+profile   = mp3tag
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly, opens a music folder and reads its tags here.
+why_fr    = S'installe sans fenêtre, ouvre un dossier de musique et lit ses étiquettes ici.
+source    = measured 2026-11-19: mp3tag-v3.37-x64-setup.exe /S (29 MB), Mp3tag.exe /fp:<folder> lists an MP3 and an MP4 with the MP3's title and artist read
+
+[winmerge]
+name      = WinMerge
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 75
+profile   = winmerge
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly and compares two files side by side here.
+why_fr    = S'installe sans fenêtre et compare deux fichiers côte à côte ici.
+source    = measured 2026-11-19: WinMerge-2.16.60-x64-Setup.exe with Inno's /VERYSILENT in 6 s (72 MB), WinMergeU.exe a.txt b.txt shows the diff, "2 Differences Found"
+
+[sumatrapdf]
+name      = SumatraPDF
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 30
+profile   = sumatrapdf
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly for you and opens PDF files here.
+why_fr    = S'installe sans fenêtre pour vous et ouvre les PDF ici.
+source    = measured 2026-11-19: SumatraPDF-3.6.1-64-install.exe -install -s in 4 s, per user under AppData\Local (29 MB), a test PDF rendered
+
+[digital-editions]
+name      = Adobe Digital Editions
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 25
+profile   = digital-editions
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly and opens EPUB books here; authorizing it with an Adobe ID has not been tried.
+why_fr    = S'installe sans fenêtre et ouvre les livres EPUB ici ; l'autorisation avec un identifiant Adobe n'a pas été essayée.
+source    = measured 2026-11-19: ADE_4.5_Installer.exe (4.5.12) /S in 4 s (exit 5, everything in place, 22 MB), DigitalEditions.exe opens its library and reads its welcome EPUB; no Adobe ID here, so protected books were not tried
+
+[aimp]
+name      = AIMP
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 80
+profile   = aimp
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly, opens and plays music here.
+why_fr    = S'installe sans fenêtre, s'ouvre et lit la musique ici.
+source    = measured 2026-11-19: aimp_5.40.2731_w64.exe /AUTO /SILENT in 11 s (80 MB), AIMP.exe <mp3> plays it: 3.2 MB of sound reached the output
+
+[windirstat]
+name      = WinDirStat
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 3
+profile   = windirstat
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly, scans the disk and draws its map here.
+why_fr    = S'installe sans fenêtre, analyse le disque et dessine sa carte ici.
+source    = measured 2026-11-19: WinDirStat-x64.msi (2.9.3) /qn in 2 s, WinDirStat.exe scans C: and draws the treemap; it offers to restart elevated, No goes on
+
+[total-commander]
+name      = Total Commander
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 22
+profile   = total-commander
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly and opens with both panes listing your files here.
+why_fr    = S'installe sans fenêtre et s'ouvre avec ses deux volets qui listent vos fichiers ici.
+source    = measured 2026-11-19: tcmd115801x64.exe /AHMGDU in 4 s (22 MB), TOTALCMD64.EXE opens both panes on C: behind its shareware reminder
+
+[foobar2000]
+name      = foobar2000
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 25
+profile   = foobar2000
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly, opens and plays music here.
+why_fr    = S'installe sans fenêtre, s'ouvre et lit la musique ici.
+source    = measured 2026-11-19: foobar2000-x64_v2.26.3.exe /S in 4 s (24 MB), foobar2000.exe /play <mp3> plays it into its playlist: 3.4 MB of sound reached the output
+
+[winamp]
+name      = Winamp
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 45
+profile   = winamp
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly, opens and plays music here.
+why_fr    = S'installe sans fenêtre, s'ouvre et lit la musique ici.
+source    = measured 2026-11-19: winamp_latest_full.exe (5.9.2 build 10042) /S in 8 s (44 MB), first-run skin choice, winamp.exe <mp3> plays it: 8.6 MB of sound out, still running after 60 s
+
+[heidisql]
+name      = HeidiSQL
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 90
+profile   = heidisql
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly and opens a database here (checked with an SQLite file).
+why_fr    = S'installe sans fenêtre et ouvre une base de données ici (vérifié avec un fichier SQLite).
+source    = measured 2026-11-19: HeidiSQL_12.22.0.7382_Setup.exe with Inno's /VERYSILENT in 6 s (86 MB), heidisql.exe -n=10 -l=sqlite3.dll -h=<test.db> connects and lists the database; no MySQL or PostgreSQL server here
+
+[sharex]
+name      = ShareX
+state     = works
+upstream  = none
+anticheat = none
+size_mb   = 515
+profile   = sharex
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Installs quietly and takes screenshots here; on Wayland it sees only the windows of Windows programs.
+why_fr    = S'installe sans fenêtre et fait des captures d'écran ici ; sous Wayland il ne voit que les fenêtres des programmes Windows.
+source    = measured 2026-11-19: ShareX-22.4.0-setup-x64.exe with Inno's /VERYSILENT in 27 s (514 MB), welcome screen, ShareX.exe -PrintScreen saved a full-screen PNG to Documents\ShareX\Screenshots; X11 only, Wayland not tried
+
+[itunes]
+name      = iTunes
+state     = partial
+upstream  = none
+anticheat = none
+size_mb   = 435
+profile   = itunes
+tested_on = the agents' build machine: raye-wine 11.21-1~raye5 and its standard space, on a virtual screen with no graphics card, sound to a null device
+tested_at = 2026-11-19
+why_en    = Plays and organizes your music here; iPhone sync and backups can't work, they need Apple's USB driver.
+why_fr    = Lit et range votre musique ici ; la synchronisation et les sauvegardes d'iPhone ne marchent pas, elles demandent le pilote USB d'Apple.
+source    = measured 2026-11-19: iTunes64Setup.exe (12.13.12) /quiet in 16 s (434 MB), licence then Welcome page, iTunes.exe <mp3> plays it (sound reached the output); the main window went black later in this run; Apple Mobile Device Support is a kernel driver; Store and sign-in not tried
+
+[ea-app]
+name      = EA app
+state     = untested
+upstream  = none
+anticheat = none
+size_mb   = 650
+profile   = ea-app
+why_en    = Installs quietly and opens to its sign-in here; signing in and games have not been tried yet.
+why_fr    = S'installe sans fenêtre et s'ouvre sur sa connexion ici ; la connexion et les jeux n'ont pas encore été essayés.
+source    = measured 2026-11-19: EAappInstaller.exe (EA Desktop 13.832.0.6345) /quiet in 27 s (645 MB), EADesktop.exe opens the EA sign-in page; no account here; games with their own anti-cheat follow their own titles

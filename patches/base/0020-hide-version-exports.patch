@@ -1,0 +1,148 @@
+Subject: ntdll: hide the version exports from programs that ask for it
+
+Some programs (rekordbox among them) look up wine_get_version in ntdll
+and refuse to run when they find it. With WINEHIDEEXPORTS=1 in the
+environment, or HideWineExports="Y" under HKCU\Software\Wine\AppDefaults\
+<program>.exe or HKCU\Software\Wine (the value wine-staging reads),
+GetProcAddress does not find wine_get_version, wine_get_build_id and
+wine_get_host_version. WINEHIDEEXPORTS=0 turns it off whatever the
+registry says. Off by default: nothing changes for other programs.
+---
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -98,6 +98,7 @@
+ static DWORD default_search_flags;  /* default flags set by LdrSetDefaultDllDirectories */
+ static WCHAR *default_load_path;    /* default dll search path */
+ static HANDLE known_dlls_ntdir;  /* NT directory containing known dlls sections */
++static BOOL hide_exports;  /* GetProcAddress does not find the version exports */
+ 
+ struct dll_dir_entry
+ {
+@@ -2060,6 +2061,14 @@
+ }
+ 
+ 
++static BOOL is_hidden_export( const void *proc )
++{
++    return hide_exports && (proc == (const void *)wine_get_version ||
++                            proc == (const void *)wine_get_build_id ||
++                            proc == (const void *)wine_get_host_version);
++}
++
++
+ /******************************************************************
+  *		LdrGetProcedureAddress  (NTDLL.@)
+  */
+@@ -2080,6 +2089,7 @@
+     {
+         void *proc = name ? find_named_export( module, exports, exp_size, name->Buffer, -1, NULL, wm, TRUE )
+                           : find_ordinal_export( module, exports, exp_size, ord - exports->Base, NULL, wm, TRUE );
++        if (is_hidden_export( proc )) proc = NULL;
+         if (proc)
+         {
+             *address = proc;
+@@ -4223,6 +4233,81 @@
+     }
+ }
+ 
++static BOOL option_is_true( const WCHAR *str )
++{
++    return str[0] == 'y' || str[0] == 'Y' || str[0] == 't' || str[0] == 'T' || str[0] == '1';
++}
++
++/* HideWineExports under one key; -1 when it is not there */
++static int query_hide_exports( HANDLE root, const WCHAR *path )
++{
++    UNICODE_STRING str;
++    OBJECT_ATTRIBUTES attr;
++    HANDLE hkey;
++    WCHAR buffer[32];
++    KEY_VALUE_PARTIAL_INFORMATION *info = (KEY_VALUE_PARTIAL_INFORMATION *)buffer;
++    ULONG size = sizeof(buffer) - sizeof(WCHAR);
++    int ret = -1;
++
++    RtlInitUnicodeString( &str, path );
++    InitializeObjectAttributes( &attr, &str, OBJ_CASE_INSENSITIVE, root, NULL );
++    if (NtOpenKey( &hkey, KEY_QUERY_VALUE, &attr )) return -1;
++    RtlInitUnicodeString( &str, L"HideWineExports" );
++    if (!NtQueryValueKey( hkey, &str, KeyValuePartialInformation, buffer, size, &size ))
++    {
++        if (info->Type == REG_DWORD) ret = *(DWORD *)info->Data != 0;
++        else
++        {
++            buffer[size / sizeof(WCHAR)] = 0;
++            ret = option_is_true( (WCHAR *)info->Data );
++        }
++    }
++    NtClose( hkey );
++    return ret;
++}
++
++/***********************************************************************
++ *           load_hide_exports_option
++ *
++ * Some programs refuse to start once they find wine_get_version. Hiding
++ * it is asked for by WINEHIDEEXPORTS in the environment, else by
++ * HideWineExports under Software\Wine\AppDefaults\<app>.exe, else under
++ * Software\Wine (the same value wine-staging reads). Off by default.
++ */
++static void load_hide_exports_option(void)
++{
++    UNICODE_STRING env_str = RTL_CONSTANT_STRING( L"WINEHIDEEXPORTS" );
++    UNICODE_STRING val_str;
++    const WCHAR *app = NtCurrentTeb()->Peb->ProcessParameters->ImagePathName.Buffer, *p;
++    WCHAR buffer[MAX_PATH + 32];
++    HANDLE root;
++    int ret = -1;
++
++    val_str.Buffer = buffer;
++    val_str.MaximumLength = sizeof(buffer);
++    if (!RtlQueryEnvironmentVariable_U( NULL, &env_str, &val_str ))
++    {
++        buffer[val_str.Length / sizeof(WCHAR)] = 0;
++        hide_exports = option_is_true( buffer );
++        return;
++    }
++    if (RtlOpenCurrentUser( KEY_READ, &root )) return;
++    if (app && *app)
++    {
++        if ((p = wcsrchr( app, '\\' ))) app = p + 1;
++        if ((p = wcsrchr( app, '/' ))) app = p + 1;
++        if (wcslen( app ) < MAX_PATH)
++        {
++            wcscpy( buffer, L"Software\\Wine\\AppDefaults\\" );
++            wcscat( buffer, app );
++            ret = query_hide_exports( root, buffer );
++        }
++    }
++    if (ret == -1) ret = query_hide_exports( root, L"Software\\Wine" );
++    NtClose( root );
++    hide_exports = ret == 1;
++}
++
+ static BOOL needs_elevation(void)
+ {
+     ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION run_level;
+@@ -4490,6 +4575,7 @@
+ 
+         init_user_process_params();
+         load_global_options();
++        load_hide_exports_option();
+         version_init();
+         open_known_dll_ntdir();
+ 
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -106,6 +106,10 @@
+ static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiBatchCount; }
+ #endif
+ 
++extern const char * CDECL wine_get_version(void);
++extern const char * CDECL wine_get_build_id(void);
++extern void CDECL wine_get_host_version( const char **sysname, const char **release );
++
+ static inline void *get_rva( HMODULE module, DWORD va )
+ {
+     return (void *)((char *)module + va);

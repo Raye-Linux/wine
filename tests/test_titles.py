@@ -7,10 +7,10 @@ The one rule worth the whole file: a state that tells somebody a game
 plays here has to carry the machine it played on and the day it did.
 A launcher that opened is not a game that played, and "it probably
 works" in front of a forty-gigabyte download is a lie with a progress
-bar. So `works` and `offline-only` are refused without tested_on and
-tested_at, and nothing in the tree can write them by accident.
+bar. So `works`, `offline-only` and `partial` are refused without tested_on
+and tested_at, and nothing in the tree can write them by accident.
 
-Also checked: every state word is one of the four; `blocked` carries the
+Also checked: every state word is one of the five; `blocked` carries the
 publisher's refusal and a source, so a no is never just an opinion;
 every reason is one short line in both languages; every profile= names a
 profile that exists; the generated list cannot bury a verified answer;
@@ -34,8 +34,10 @@ PROFILES = WINDOWS / "profiles"
 READER = WINDOWS / "raye-windows-titles"
 sys.dont_write_bytecode = True
 
-# The four words, and whether each is a positive claim about this system.
-POSITIVE = {"works": True, "offline-only": True, "blocked": False, "untested": False}
+# The five words, and whether each is a positive claim about this system.
+# partial: tried here, it opens and does part of its job; the why says
+# what does not work.
+POSITIVE = {"works": True, "offline-only": True, "partial": True, "blocked": False, "untested": False}
 
 
 def reader():
@@ -63,7 +65,10 @@ class Shape(unittest.TestCase):
         for path in files():
             parse(path)                      # raises on a malformed file
 
-    def test_every_state_is_one_of_the_four_words(self):
+    def test_the_reader_knows_the_same_words(self):
+        self.assertEqual(reader().STATES, POSITIVE)
+
+    def test_every_state_is_one_of_the_known_words(self):
         for path in files():
             for tid, section in parse(path).items():
                 if tid == "DEFAULT":
@@ -87,7 +92,7 @@ class Shape(unittest.TestCase):
 
 
 class APositiveStateNeedsAWitness(unittest.TestCase):
-    """works and offline-only are claims somebody has to stand behind."""
+    """works, offline-only and partial are claims somebody has to stand behind."""
 
     def records(self):
         for path in files():
