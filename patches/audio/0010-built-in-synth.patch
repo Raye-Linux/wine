@@ -1,0 +1,239 @@
+Subject: winealsa: a General MIDI synth that is always there
+
+Windows always lists its own synth as the first MIDI output, so MIDI music
+plays with nothing plugged in. Raye's synth (/usr/libexec/raye-synth) only
+runs while something plays: it is listed first whenever it is installed,
+and started when a program opens it. Before this MIDI Mapper took the
+first device, which is "Midi Through" on most systems, and played nothing.
+---
+diff --git a/dlls/winealsa.drv/alsamidi.c b/dlls/winealsa.drv/alsamidi.c
+index def6c83..64160b9 100644
+--- a/dlls/winealsa.drv/alsamidi.c
++++ b/dlls/winealsa.drv/alsamidi.c
+@@ -33,6 +33,11 @@
+ #include <stdint.h>
+ #include <unistd.h>
+ #include <pthread.h>
++#include <spawn.h>
++#include <signal.h>
++#include <errno.h>
++#include <sys/stat.h>
++#include <sys/wait.h>
+ #include <time.h>
+ #include <alsa/asoundlib.h>
+ 
+@@ -60,6 +65,7 @@ struct midi_dest
+     snd_seq_t          *seq;
+     snd_seq_addr_t      addr;
+     int                 port_out;
++    BOOL                on_demand;
+ };
+ 
+ struct midi_src
+@@ -75,6 +81,13 @@ struct midi_src
+     int                 port_in;
+ };
+ 
++extern char **environ;
++
++/* Raye's own synthesizer only runs while something plays. It is always the
++ * first output, like the synth Windows ships, and starts when it is opened. */
++static const char synth_name[] = "Raye Synth";
++static const char synth_starter[] = "/usr/libexec/raye-synth";
++
+ static pthread_mutex_t seq_mutex = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_mutex_t in_buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
+ 
+@@ -421,12 +434,105 @@ static BOOL is_hidden_client(snd_seq_client_info_t *cinfo)
+     return !strcmp(name, "PipeWire-System") || !strcmp(name, "PipeWire-RT-Event");
+ }
+ 
++static BOOL is_synth_client(snd_seq_client_info_t *cinfo)
++{
++    return !strcmp(snd_seq_client_info_get_name(cinfo), synth_name);
++}
++
++/* Someone else signed in at the same time runs a synth of their own. */
++static BOOL synth_is_ours(snd_seq_client_info_t *cinfo)
++{
++    char path[32];
++    struct stat st;
++    int pid = snd_seq_client_info_get_pid(cinfo);
++
++    if (pid <= 0) return TRUE;
++    snprintf(path, sizeof(path), "/proc/%d", pid);
++    return stat(path, &st) || st.st_uid == getuid();
++}
++
++static BOOL synth_find(snd_seq_t *seq, snd_seq_addr_t *addr)
++{
++    snd_seq_client_info_t *cinfo;
++    snd_seq_port_info_t *pinfo;
++    BOOL found = FALSE;
++
++    snd_seq_client_info_alloca(&cinfo);
++    snd_seq_port_info_alloca(&pinfo);
++    seq_lock();
++    snd_seq_client_info_set_client(cinfo, -1);
++    while (!found && snd_seq_query_next_client(seq, cinfo) >= 0)
++    {
++        if (!is_synth_client(cinfo) || !synth_is_ours(cinfo)) continue;
++        snd_seq_port_info_set_client(pinfo, snd_seq_client_info_get_client(cinfo));
++        snd_seq_port_info_set_port(pinfo, -1);
++        while (snd_seq_query_next_port(seq, pinfo) >= 0)
++        {
++            if (!(snd_seq_port_info_get_capability(pinfo) & SND_SEQ_PORT_CAP_WRITE)) continue;
++            *addr = *snd_seq_port_info_get_addr(pinfo);
++            found = TRUE;
++            break;
++        }
++    }
++    seq_unlock();
++    return found;
++}
++
++static void synth_start(void)
++{
++    char *argv[] = { (char *)synth_starter, (char *)"start", NULL };
++    posix_spawnattr_t attr;
++    sigset_t none, all;
++    pid_t pid;
++    int err;
++
++    sigemptyset(&none);
++    sigfillset(&all);
++    posix_spawnattr_init(&attr);
++    posix_spawnattr_setsigmask(&attr, &none);
++    posix_spawnattr_setsigdefault(&attr, &all);
++    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
++    err = posix_spawn(&pid, synth_starter, NULL, &attr, argv, environ);
++    posix_spawnattr_destroy(&attr);
++    if (err)
++    {
++        WARN("could not run %s: %s\n", synth_starter, strerror(err));
++        return;
++    }
++    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR);
++}
++
++/* Listed before the ports it stands for, so MIDI Mapper's first device is a
++ * synth that makes sound and never "Midi Through". */
++static void synth_add(void)
++{
++    struct midi_dest *dest;
++
++    dests = realloc(dests, (num_dests + 1) * sizeof(*dests));
++    dest = dests + num_dests;
++    memset(dest, 0, sizeof(*dest));
++    dest->caps.wMid = 0x00FF;
++    dest->caps.wPid = 0x0001;
++    dest->caps.vDriverVersion = 0x001;
++    ntdll_umbstowcs(synth_name, sizeof(synth_name), dest->caps.szPname, ARRAY_SIZE(dest->caps.szPname));
++    dest->caps.wTechnology = MOD_SWSYNTH;
++    dest->caps.wVoices = 32;
++    dest->caps.wNotes = 32;
++    dest->caps.wChannelMask = 0xFFFF;
++    dest->caps.dwSupport = MIDICAPS_VOLUME | MIDICAPS_LRVOLUME;
++    dest->bEnabled = TRUE;
++    dest->port_out = -1;
++    dest->on_demand = TRUE;
++    num_dests++;
++}
++
+ static UINT alsa_midi_init(void)
+ {
+     static BOOL init_done;
+     snd_seq_client_info_t *cinfo;
+     snd_seq_port_info_t *pinfo;
+     snd_seq_t *seq;
++    BOOL builtin;
+ 
+     if (init_done)
+         return ERROR_ALREADY_INITIALIZED;
+@@ -438,13 +544,17 @@ static UINT alsa_midi_init(void)
+     if (!(seq = seq_open(NULL)))
+         return ERROR_OPEN_FAILED;
+ 
++    builtin = !access(synth_starter, X_OK);
++
+     cinfo = calloc( 1, snd_seq_client_info_sizeof() );
+     pinfo = calloc( 1, snd_seq_port_info_sizeof() );
+ 
++    if (builtin) synth_add();
++
+     /* First, search for all internal midi devices */
+     snd_seq_client_info_set_client(cinfo, -1);
+     while (snd_seq_query_next_client(seq, cinfo) >= 0) {
+-        if (is_hidden_client(cinfo)) continue;
++        if (is_hidden_client(cinfo) || (builtin && is_synth_client(cinfo))) continue;
+         snd_seq_port_info_set_client(pinfo, snd_seq_client_info_get_client(cinfo));
+         snd_seq_port_info_set_port(pinfo, -1);
+         while (snd_seq_query_next_port(seq, pinfo) >= 0) {
+@@ -458,7 +568,7 @@ static UINT alsa_midi_init(void)
+     /* Second, search for all external ports */
+     snd_seq_client_info_set_client(cinfo, -1);
+     while (snd_seq_query_next_client(seq, cinfo) >= 0) {
+-        if (is_hidden_client(cinfo)) continue;
++        if (is_hidden_client(cinfo) || (builtin && is_synth_client(cinfo))) continue;
+         snd_seq_port_info_set_client(pinfo, snd_seq_client_info_get_client(cinfo));
+         snd_seq_port_info_set_port(pinfo, -1);
+         while (snd_seq_query_next_port(seq, pinfo) >= 0) {
+@@ -537,6 +647,7 @@ static UINT midi_out_open(WORD dev_id, MIDIOPENDESC *midi_desc, UINT flags, stru
+     case MOD_FMSYNTH:
+     case MOD_MIDIPORT:
+     case MOD_SYNTH:
++    case MOD_SWSYNTH:
+         if (!(midi_seq = seq_open(NULL)))
+             return MMSYSERR_ALLOCATED;
+         break;
+@@ -545,6 +656,26 @@ static UINT midi_out_open(WORD dev_id, MIDIOPENDESC *midi_desc, UINT flags, stru
+         return MMSYSERR_NOTENABLED;
+     }
+ 
++    /* found again on every open: it may have stopped and come back */
++    if (dest->on_demand && !synth_find(midi_seq, &dest->addr))
++    {
++        int tries;
++        BOOL found = FALSE;
++
++        synth_start();
++        for (tries = 0; !found && tries < 20; tries++)
++        {
++            found = synth_find(midi_seq, &dest->addr);
++            if (!found) usleep(50000);
++        }
++        if (!found)
++        {
++            WARN("%s did not start\n", synth_name);
++            seq_close();
++            return MIDIERR_NODEVICE;
++        }
++    }
++
+     dest->runningStatus = 0;
+     dest->wFlags = HIWORD(flags & CALLBACK_TYPEMASK);
+     dest->midiDesc = *midi_desc;
+@@ -624,6 +755,7 @@ static UINT midi_out_close(WORD dev_id, struct notify_context *notify)
+     case MOD_FMSYNTH:
+     case MOD_MIDIPORT:
+     case MOD_SYNTH:
++    case MOD_SWSYNTH:
+         seq_lock();
+         TRACE("Deleting port :%d, connected to %d:%d\n", dest->port_out, dest->addr.client, dest->addr.port);
+         snd_seq_delete_simple_port(dest->seq, dest->port_out);
+@@ -686,6 +818,7 @@ static UINT midi_out_data(WORD dev_id, UINT data)
+     switch (dest->caps.wTechnology)
+     {
+     case MOD_SYNTH:
++    case MOD_SWSYNTH:
+     case MOD_MIDIPORT:
+     {
+         int handled = 1; /* Assume event is handled */
+@@ -850,6 +983,7 @@ static UINT midi_out_long_data(WORD dev_id, MIDIHDR *hdr, UINT hdr_size, struct
+         free(new_data);
+         break;
+     case MOD_MIDIPORT:
++    case MOD_SWSYNTH:
+         if (data[0] != 0xF0)
+         {
+             /* Send start of System Exclusive */

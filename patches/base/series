@@ -22,3 +22,6 @@
 0021-raye-file-dialog.patch
 0022-device-manager-names.patch
 0023-serial-ports.patch
+0024-camera-media-source.patch
+0025-qcap-capture-fixes.patch
+0026-print-creator.patch

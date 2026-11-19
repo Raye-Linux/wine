@@ -1,0 +1,33 @@
+Subject: qcap: no garbage pUnk for 32-bit programs, stop GetStreamCaps at the end
+
+The 32-bit thunk never wrote pUnk back, so GetStreamCaps and GetFormat gave
+32-bit programs an AM_MEDIA_TYPE whose pUnk was whatever CoTaskMemAlloc left,
+and DeleteMediaType released it. GetStreamCaps also took index == count and read
+one entry past the list.
+---
+diff --git a/dlls/qcap/v4l.c b/dlls/qcap/v4l.c
+index a963372..5e92677 100644
+--- a/dlls/qcap/v4l.c
++++ b/dlls/qcap/v4l.c
+@@ -698,6 +698,8 @@ static void put_media_type( const AM_MEDIA_TYPE *mt, struct am_media_type32 *mt3
+     mt32->bTemporalCompression = mt->bTemporalCompression;
+     mt32->lSampleSize          = mt->lSampleSize;
+     mt32->formattype           = mt->formattype;
++    /* the caller fills cbFormat and pbFormat; pUnk would stay garbage */
++    mt32->pUnk                 = 0;
+ }
+ 
+ static NTSTATUS wow64_v4l_device_create( void *args )
+diff --git a/dlls/qcap/vfwcapture.c b/dlls/qcap/vfwcapture.c
+index 97f79c9..2b3c7ef 100644
+--- a/dlls/qcap/vfwcapture.c
++++ b/dlls/qcap/vfwcapture.c
+@@ -429,7 +429,7 @@ static HRESULT WINAPI AMStreamConfig_GetStreamCaps(IAMStreamConfig *iface,
+     TRACE("filter %p, index %d, pmt %p, vscc %p.\n", filter, index, pmt, vscc);
+ 
+     V4L_CALL( get_caps_count, &count_params );
+-    if (index > count)
++    if (index < 0 || index >= count)
+         return S_FALSE;
+ 
+     if (!(mt = CoTaskMemAlloc(sizeof(AM_MEDIA_TYPE))))

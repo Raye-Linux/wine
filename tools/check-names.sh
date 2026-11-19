@@ -20,12 +20,13 @@ titles=$(grep -n -E 'L"[^"]*\bWine\b[^"]*"' \
     grep -v -E 'WINE_(TRACE|ERR|WARN|FIXME)|Software.{1,4}Wine')
 
 # names programs read from the system and show: input devices, the ACM
-# codecs and their copyright, MCI, DirectDraw devices, WMI, MIDI ports
+# codecs and their copyright, MCI, DirectDraw devices, WMI, MIDI ports, cameras
 devices=$(grep -n -i -E '"[^"]*\bwine\b' dlls/dinput/mouse.c dlls/dinput/keyboard.c \
     dlls/msacm32/pcmconverter.c dlls/msadp32.acm/msadp32.c dlls/msg711.acm/msg711.c \
     dlls/l3codeca.acm/mpegl3.c dlls/msgsm32.acm/msgsm32.c dlls/imaadp32.acm/imaadp32.c \
     dlls/mcicda/mcicda.c dlls/mciwave/mciwave.c dlls/mciavi32/wnd.c dlls/mciavi32/info.c \
-    dlls/mmsystem.dll16/driver.c dlls/ddraw/ddraw.c dlls/msvcrt/exit.c dlls/winealsa.drv/alsamidi.c |
+    dlls/mmsystem.dll16/driver.c dlls/ddraw/ddraw.c dlls/msvcrt/exit.c dlls/winealsa.drv/alsamidi.c \
+    dlls/winegstreamer/wg_camera.c |
     grep -v -E ':[0-9]+:#include|WINE_(TRACE|ERR|WARN|FIXME)|\b(TRACE|ERR|WARN|FIXME)\(')
 wmi=$(grep -Hn -E 'L"Wine (Audio Device|Disk Drive|disk|CD_ROM)|L"The Wine Project"|L"Wine"' dlls/wbemprox/builtin.c)
 # device names and makers in the bus drivers' installation files; the

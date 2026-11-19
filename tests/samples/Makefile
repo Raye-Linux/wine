@@ -4,8 +4,9 @@ CC = x86_64-w64-mingw32-gcc
 CC32 = i686-w64-mingw32-gcc
 CFLAGS = -O2 -Wall
 PROGRAMS = d3d11-triangle.exe d3d12-clear.exe sound-check.exe crash.exe d2d1-effect.exe \
-           runtimes-check.exe runtimes-check32.exe midi-in.exe child-focus.exe \
-           fontprobe.exe laa-check32.exe hw-check.exe hw-check32.exe deps-check.exe deps-check32.exe dialog-probe.exe dialog-probe32.exe
+           runtimes-check.exe runtimes-check32.exe midi-in.exe midi-out.exe child-focus.exe \
+           fontprobe.exe laa-check32.exe hw-check.exe hw-check32.exe deps-check.exe deps-check32.exe dialog-probe.exe dialog-probe32.exe \
+           cam-check.exe cam-check32.exe
 
 all: $(PROGRAMS)
 
@@ -28,6 +29,9 @@ runtimes-check32.exe: runtimes-check.c
 	$(CC32) $(CFLAGS) -o $@ $<
 
 midi-in.exe: midi-in.c
+	$(CC) $(CFLAGS) -o $@ $< -lwinmm
+
+midi-out.exe: midi-out.c
 	$(CC) $(CFLAGS) -o $@ $< -lwinmm
 
 child-focus.exe: child-focus.c
@@ -59,6 +63,14 @@ deps-check.exe: deps-check.c
 
 deps-check32.exe: deps-check.c
 	$(CC32) $(CFLAGS) -o $@ $< -lole32 -luuid
+
+CAM_LIBS = -lole32 -loleaut32 -luuid -lmfplat -lmf -lmfreadwrite -lmfuuid -lstrmiids
+
+cam-check.exe: cam-check.c
+	$(CC) $(CFLAGS) -o $@ $< $(CAM_LIBS)
+
+cam-check32.exe: cam-check.c
+	$(CC32) $(CFLAGS) -o $@ $< $(CAM_LIBS)
 
 crash.exe: crash.c
 	$(CC) $(CFLAGS) -mwindows -o $@ $<

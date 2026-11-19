@@ -9,6 +9,12 @@ raye-wine (11.21-1~raye7) resolute; urgency=medium
     program.
   * System information tools show Windows device names, and a USB serial
     adapter is COM1 instead of COM33.
+  * Windows programs that use Media Foundation see the camera, in the
+    sizes and formats it really gives, and 32-bit camera programs no
+    longer crash on the format list.
+  * Raye Synth is the first MIDI output, like the synth Windows ships, so
+    MIDI Mapper no longer picks a silent port. Documents printed to PDF no
+    longer name the layer as their creator.
 
  -- techoraye <190692880+techoraye@users.noreply.github.com>  Thu, 19 Nov 2026 17:00:00 +0000
 

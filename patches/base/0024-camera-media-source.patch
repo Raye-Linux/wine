@@ -1,0 +1,2222 @@
+Subject: winegstreamer, mf: list cameras and read them in Media Foundation
+
+MFEnumDeviceSources always said there was no camera and MFCreateDeviceSource
+was a stub, so programs that take the camera through Media Foundation saw
+none. Cameras now come from GStreamer's v4l2 device provider, with the
+formats and rates they really give (NV12, YUY2, MJPG...); a size a camera
+only gives as MJPG also gets a decoded NV12 type. WINE_GST_TEST_CAMERA=<name>
+adds a test pattern camera through the same path.
+---
+diff --git a/dlls/mf/Makefile.in b/dlls/mf/Makefile.in
+index 9e85615..a34a45e 100644
+--- a/dlls/mf/Makefile.in
++++ b/dlls/mf/Makefile.in
+@@ -1,7 +1,7 @@
+ MODULE    = mf.dll
+ IMPORTLIB = mf
+ IMPORTS   = advapi32 mfplat ole32 uuid mfuuid strmiids kernelbase
+-DELAYIMPORTS = evr urlmon user32
++DELAYIMPORTS = evr urlmon user32 winegstreamer
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+diff --git a/dlls/mf/main.c b/dlls/mf/main.c
+index 779e92f..3d3d2cc 100644
+--- a/dlls/mf/main.c
++++ b/dlls/mf/main.c
+@@ -930,6 +930,97 @@ HRESULT WINAPI MFShutdownObject(IUnknown *object)
+     return S_OK;
+ }
+ 
++extern HRESULT WINAPI winegstreamer_enum_video_capture(WCHAR ***names, WCHAR ***links, UINT32 *count);
++extern HRESULT WINAPI winegstreamer_create_video_capture_source(const WCHAR *link, IMFMediaSource **source);
++
++static const GUID KSCATEGORY_VIDEO_CAMERA = {0xe5323777, 0xf976, 0x4f5b, {0x9b, 0x55, 0xb9, 0x46, 0x99, 0xc4, 0x6e, 0x44}};
++
++static HRESULT video_capture_create_object(IMFAttributes *attributes, void *user_context, IUnknown **obj)
++{
++    IMFMediaSource *source;
++    WCHAR *link;
++    UINT32 len;
++    HRESULT hr;
++
++    TRACE("%p, %p, %p.\n", attributes, user_context, obj);
++
++    if (FAILED(hr = IMFAttributes_GetAllocatedString(attributes,
++            &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, &link, &len)))
++        return hr;
++    hr = winegstreamer_create_video_capture_source(link, &source);
++    CoTaskMemFree(link);
++    if (SUCCEEDED(hr))
++        *obj = (IUnknown *)source;
++    return hr;
++}
++
++static void video_capture_shutdown_object(void *user_context, IUnknown *obj)
++{
++    IMFMediaSource *source;
++
++    if (SUCCEEDED(IUnknown_QueryInterface(obj, &IID_IMFMediaSource, (void **)&source)))
++    {
++        IMFMediaSource_Shutdown(source);
++        IMFMediaSource_Release(source);
++    }
++}
++
++static void video_capture_free_private(void *user_context)
++{
++}
++
++static const struct activate_funcs video_capture_activate_funcs =
++{
++    video_capture_create_object,
++    video_capture_shutdown_object,
++    video_capture_free_private,
++};
++
++static HRESULT enum_video_capture_sources(IMFAttributes *attributes, IMFActivate ***ret_sources, UINT32 *ret_count)
++{
++    WCHAR **names = NULL, **links = NULL;
++    IMFActivate **sources = NULL;
++    UINT32 i, count = 0, created = 0;
++    HRESULT hr;
++
++    if (FAILED(hr = winegstreamer_enum_video_capture(&names, &links, &count)))
++        return hr;
++
++    if (count && !(sources = CoTaskMemAlloc(count * sizeof(*sources))))
++        hr = E_OUTOFMEMORY;
++    for (i = 0; i < count && SUCCEEDED(hr); ++i)
++    {
++        if (FAILED(hr = create_activation_object(NULL, &video_capture_activate_funcs, &sources[i])))
++            break;
++        created++;
++        IMFActivate_SetGUID(sources[i], &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
++        IMFActivate_SetGUID(sources[i], &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_CATEGORY, &KSCATEGORY_VIDEO_CAMERA);
++        IMFActivate_SetUINT32(sources[i], &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_HW_SOURCE, 1);
++        IMFActivate_SetString(sources[i], &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, names[i]);
++        hr = IMFActivate_SetString(sources[i], &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, links[i]);
++    }
++
++    for (i = 0; i < count; ++i)
++    {
++        CoTaskMemFree(names[i]);
++        CoTaskMemFree(links[i]);
++    }
++    CoTaskMemFree(names);
++    CoTaskMemFree(links);
++
++    if (FAILED(hr))
++    {
++        for (i = 0; i < created; ++i)
++            IMFActivate_Release(sources[i]);
++        CoTaskMemFree(sources);
++        return hr;
++    }
++    *ret_sources = sources;
++    *ret_count = count;
++    TRACE("%u video capture devices.\n", count);
++    return S_OK;
++}
++
+ /***********************************************************************
+  *      MFEnumDeviceSources (mf.@)
+  */
+@@ -947,11 +1038,7 @@ HRESULT WINAPI MFEnumDeviceSources(IMFAttributes *attributes, IMFActivate ***sou
+         return hr;
+ 
+     if (IsEqualGUID(&source_type, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID))
+-    {
+-        FIXME("Not implemented for video capture devices.\n");
+-        *ret_count = 0;
+-        return S_OK;
+-    }
++        return enum_video_capture_sources(attributes, sources, ret_count);
+     if (IsEqualGUID(&source_type, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_AUDCAP_GUID))
+         return enum_audio_capture_sources(attributes, sources, ret_count);
+ 
+@@ -963,10 +1050,29 @@ HRESULT WINAPI MFEnumDeviceSources(IMFAttributes *attributes, IMFActivate ***sou
+  */
+ HRESULT WINAPI MFCreateDeviceSource(IMFAttributes *attributes, IMFMediaSource **source)
+ {
+-    FIXME("%p %p: stub!\n", attributes, source);
++    GUID source_type;
++    WCHAR *link;
++    UINT32 len;
++    HRESULT hr;
++
++    TRACE("%p, %p.\n", attributes, source);
+ 
+     if (!attributes || !source) return E_INVALIDARG;
+     *source = NULL;
++
++    if (FAILED(hr = IMFAttributes_GetGUID(attributes, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, &source_type)))
++        return hr;
++    if (IsEqualGUID(&source_type, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID))
++    {
++        if (FAILED(hr = IMFAttributes_GetAllocatedString(attributes,
++                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK, &link, &len)))
++            return hr;
++        hr = winegstreamer_create_video_capture_source(link, source);
++        CoTaskMemFree(link);
++        return hr;
++    }
++
++    FIXME("Unsupported source type %s.\n", debugstr_guid(&source_type));
+     return E_NOTIMPL;
+ }
+ 
+diff --git a/dlls/winegstreamer/Makefile.in b/dlls/winegstreamer/Makefile.in
+index 12907f9..9191c27 100644
+--- a/dlls/winegstreamer/Makefile.in
++++ b/dlls/winegstreamer/Makefile.in
+@@ -20,8 +20,10 @@ SOURCES = \
+ 	rsrc.rc \
+ 	unixlib.c \
+ 	video_decoder.c \
++	video_capture.c \
+ 	video_encoder.c \
+ 	wg_allocator.c \
++	wg_camera.c \
+ 	wg_format.c \
+ 	wg_media_type.c \
+ 	wg_muxer.c \
+diff --git a/dlls/winegstreamer/unix_private.h b/dlls/winegstreamer/unix_private.h
+index 3199e36..d2a4c6b 100644
+--- a/dlls/winegstreamer/unix_private.h
++++ b/dlls/winegstreamer/unix_private.h
+@@ -95,6 +95,17 @@ extern NTSTATUS wg_muxer_push_sample(void *args);
+ extern NTSTATUS wg_muxer_read_data(void *args);
+ extern NTSTATUS wg_muxer_finalize(void *args);
+ 
++/* wg_camera.c */
++
++extern NTSTATUS wg_camera_enum(void *args);
++extern NTSTATUS wg_camera_get_device(void *args);
++extern NTSTATUS wg_camera_create(void *args);
++extern NTSTATUS wg_camera_destroy(void *args);
++extern NTSTATUS wg_camera_get_mode(void *args);
++extern NTSTATUS wg_camera_start(void *args);
++extern NTSTATUS wg_camera_stop(void *args);
++extern NTSTATUS wg_camera_read(void *args);
++
+ /* wg_allocator.c */
+ 
+ static inline BYTE *wg_sample_data(struct wg_sample *sample)
+diff --git a/dlls/winegstreamer/unixlib.h b/dlls/winegstreamer/unixlib.h
+index d274d6f..211b68a 100644
+--- a/dlls/winegstreamer/unixlib.h
++++ b/dlls/winegstreamer/unixlib.h
+@@ -210,6 +210,7 @@ typedef UINT64 wg_parser_t;
+ typedef UINT64 wg_parser_stream_t;
+ typedef UINT64 wg_transform_t;
+ typedef UINT64 wg_muxer_t;
++typedef UINT64 wg_camera_t;
+ 
+ struct wg_init_gstreamer_params
+ {
+@@ -426,6 +427,65 @@ struct wg_muxer_read_data_params
+     UINT64 offset;
+ };
+ 
++/* Camera parameters hold no pointers: the 32-bit table calls the same
++ * functions. Frame data is passed as an address. */
++struct wg_camera_mode
++{
++    GUID subtype;
++    UINT32 width;
++    UINT32 height;
++    UINT32 fps_n, fps_d;            /* highest rate */
++    UINT32 fps_min_n, fps_min_d;
++    UINT32 sample_size;             /* 0 for MJPG */
++    INT32 stride;
++};
++
++struct wg_camera_enum_params
++{
++    UINT32 count;
++};
++
++struct wg_camera_get_device_params
++{
++    UINT32 index;
++    UINT32 mode_count;
++    WCHAR name[128];
++    WCHAR link[192];
++};
++
++struct wg_camera_create_params
++{
++    WCHAR link[192];
++    wg_camera_t camera;
++    UINT32 mode_count;
++};
++
++struct wg_camera_get_mode_params
++{
++    wg_camera_t camera;
++    UINT32 index;
++    struct wg_camera_mode mode;
++};
++
++struct wg_camera_start_params
++{
++    wg_camera_t camera;
++    UINT32 mode;
++    UINT32 fps_n, fps_d;            /* in: 0/0 for the highest rate; out: the rate used */
++    UINT32 __pad;
++};
++
++struct wg_camera_read_params
++{
++    wg_camera_t camera;
++    UINT64 data;
++    UINT32 capacity;
++    UINT32 size;
++    INT64 pts;                      /* 100-nanosecond units */
++    UINT32 timeout_ms;
++    UINT32 __pad;
++};
++
+ enum unix_funcs
+ {
+     unix_wg_init_gstreamer,
+@@ -476,6 +536,15 @@ enum unix_funcs
+     unix_wg_muxer_read_data,
+     unix_wg_muxer_finalize,
+ 
++    unix_wg_camera_enum,
++    unix_wg_camera_get_device,
++    unix_wg_camera_create,
++    unix_wg_camera_destroy,
++    unix_wg_camera_get_mode,
++    unix_wg_camera_start,
++    unix_wg_camera_stop,
++    unix_wg_camera_read,
++
+     unix_wg_funcs_count,
+ };
+ 
+diff --git a/dlls/winegstreamer/video_capture.c b/dlls/winegstreamer/video_capture.c
+new file mode 100644
+index 0000000..fc1f2ee
+--- /dev/null
++++ b/dlls/winegstreamer/video_capture.c
+@@ -0,0 +1,924 @@
++/*
++ * Video capture media source
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <math.h>
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "gst_private.h"
++
++#include "mfapi.h"
++#include "mferror.h"
++
++#include "wine/list.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(mfplat);
++
++enum capture_state
++{
++    CAPTURE_STOPPED,
++    CAPTURE_PAUSED,
++    CAPTURE_RUNNING,
++    CAPTURE_SHUTDOWN,
++};
++
++struct sample_token
++{
++    struct list entry;
++    IUnknown *token;
++};
++
++struct video_capture
++{
++    IMFMediaSource IMFMediaSource_iface;
++    IMFMediaStream IMFMediaStream_iface;
++    LONG refcount;
++
++    IMFMediaEventQueue *event_queue;
++    IMFMediaEventQueue *stream_queue;
++    IMFPresentationDescriptor *descriptor;
++    IMFStreamDescriptor *stream_descriptor;
++
++    wg_camera_t camera;
++    struct wg_camera_mode *modes;
++    UINT32 mode_count;
++    UINT32 mode;            /* the one running, or ~0u */
++    UINT64 rate;            /* the rate asked for, 0 for the highest */
++    UINT32 fps_n, fps_d;    /* the rate the camera runs at */
++
++    CRITICAL_SECTION cs;
++    enum capture_state state;
++    BOOL stream_active;
++    struct list tokens;
++    LONGLONG start_position, first_pts, next_time;
++    BOOL have_first_pts;
++    UINT32 generation;      /* bumped when the camera restarts, stale frames are dropped */
++
++    HANDLE thread, wake;
++    BOOL exit_thread;
++};
++
++static struct video_capture *impl_from_IMFMediaSource(IMFMediaSource *iface)
++{
++    return CONTAINING_RECORD(iface, struct video_capture, IMFMediaSource_iface);
++}
++
++static struct video_capture *impl_from_IMFMediaStream(IMFMediaStream *iface)
++{
++    return CONTAINING_RECORD(iface, struct video_capture, IMFMediaStream_iface);
++}
++
++static HRESULT status_to_hresult(NTSTATUS status)
++{
++    switch (status)
++    {
++    case STATUS_SUCCESS: return S_OK;
++    case STATUS_DEVICE_BUSY: return MF_E_HW_MFT_FAILED_START_STREAMING;
++    case STATUS_DEVICE_NOT_CONNECTED: return MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED;
++    case STATUS_NOT_FOUND: return MF_E_NOT_FOUND;
++    default: return HRESULT_FROM_NT(status);
++    }
++}
++
++static HRESULT create_media_type(const struct wg_camera_mode *mode, IMFMediaType **out)
++{
++    IMFMediaType *type;
++    HRESULT hr;
++
++    if (FAILED(hr = MFCreateMediaType(&type)))
++        return hr;
++    IMFMediaType_SetGUID(type, &MF_MT_MAJOR_TYPE, &MFMediaType_Video);
++    IMFMediaType_SetGUID(type, &MF_MT_SUBTYPE, &mode->subtype);
++    IMFMediaType_SetUINT64(type, &MF_MT_FRAME_SIZE, (UINT64)mode->width << 32 | mode->height);
++    IMFMediaType_SetUINT64(type, &MF_MT_FRAME_RATE, (UINT64)mode->fps_n << 32 | mode->fps_d);
++    IMFMediaType_SetUINT64(type, &MF_MT_FRAME_RATE_RANGE_MAX, (UINT64)mode->fps_n << 32 | mode->fps_d);
++    IMFMediaType_SetUINT64(type, &MF_MT_FRAME_RATE_RANGE_MIN, (UINT64)mode->fps_min_n << 32 | mode->fps_min_d);
++    IMFMediaType_SetUINT64(type, &MF_MT_PIXEL_ASPECT_RATIO, (UINT64)1 << 32 | 1);
++    IMFMediaType_SetUINT32(type, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
++    IMFMediaType_SetUINT32(type, &MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
++    if (IsEqualGUID(&mode->subtype, &MFVideoFormat_MJPG))
++    {
++        IMFMediaType_SetUINT32(type, &MF_MT_COMPRESSED, TRUE);
++        IMFMediaType_SetUINT32(type, &MF_MT_FIXED_SIZE_SAMPLES, FALSE);
++    }
++    else
++    {
++        IMFMediaType_SetUINT32(type, &MF_MT_FIXED_SIZE_SAMPLES, TRUE);
++        IMFMediaType_SetUINT32(type, &MF_MT_SAMPLE_SIZE, mode->sample_size);
++        IMFMediaType_SetUINT32(type, &MF_MT_DEFAULT_STRIDE, mode->stride);
++        IMFMediaType_SetUINT32(type, &MF_MT_AVG_BITRATE,
++                (UINT32)min((UINT64)mode->sample_size * 8 * mode->fps_n / max(mode->fps_d, 1), UINT_MAX));
++    }
++    *out = type;
++    return S_OK;
++}
++
++/* The mode a media type asks for: same format and size, and the closest
++ * rate. Programs often build their own type instead of taking one of ours. */
++static HRESULT find_mode(struct video_capture *capture, IMFMediaType *type, UINT32 *index, UINT64 *ret_rate)
++{
++    UINT64 size, rate = 0;
++    UINT32 i, best = ~0u;
++    double want, diff, best_diff = 0;
++    GUID subtype;
++
++    if (FAILED(IMFMediaType_GetGUID(type, &MF_MT_SUBTYPE, &subtype))
++            || FAILED(IMFMediaType_GetUINT64(type, &MF_MT_FRAME_SIZE, &size)))
++        return MF_E_INVALIDMEDIATYPE;
++    IMFMediaType_GetUINT64(type, &MF_MT_FRAME_RATE, &rate);
++    want = (UINT32)rate ? (double)(rate >> 32) / (UINT32)rate : 0;
++
++    for (i = 0; i < capture->mode_count; ++i)
++    {
++        const struct wg_camera_mode *mode = &capture->modes[i];
++
++        if (!IsEqualGUID(&mode->subtype, &subtype) || mode->width != (UINT32)(size >> 32)
++                || mode->height != (UINT32)size)
++            continue;
++        diff = fabs((double)mode->fps_n / mode->fps_d - want);
++        if (best == ~0u || diff < best_diff)
++        {
++            best = i;
++            best_diff = diff;
++        }
++    }
++    if (best == ~0u)
++        return MF_E_INVALIDMEDIATYPE;
++    *index = best;
++    *ret_rate = rate;
++    return S_OK;
++}
++
++static void flush_tokens(struct video_capture *capture)
++{
++    struct sample_token *token, *next;
++
++    LIST_FOR_EACH_ENTRY_SAFE(token, next, &capture->tokens, struct sample_token, entry)
++    {
++        list_remove(&token->entry);
++        if (token->token)
++            IUnknown_Release(token->token);
++        free(token);
++    }
++}
++
++static void stop_camera(struct video_capture *capture)
++{
++    if (capture->mode != ~0u)
++    {
++        WINE_UNIX_CALL(unix_wg_camera_stop, &capture->camera);
++        capture->mode = ~0u;
++        capture->generation++;
++    }
++}
++
++static void deliver_frame(struct video_capture *capture, IMFMediaBuffer *buffer, LONGLONG pts, UINT32 generation)
++{
++    struct sample_token *token;
++    LONGLONG time, duration;
++    IMFSample *sample;
++
++    if (capture->state != CAPTURE_RUNNING || list_empty(&capture->tokens) || capture->mode == ~0u
++            || generation != capture->generation)
++        return;
++    if (FAILED(MFCreateSample(&sample)))
++        return;
++
++    if (!capture->have_first_pts)
++    {
++        capture->first_pts = pts;
++        capture->have_first_pts = TRUE;
++        IMFSample_SetUINT32(sample, &MFSampleExtension_Discontinuity, TRUE);
++    }
++    time = capture->start_position + max(pts - capture->first_pts, 0);
++    duration = (LONGLONG)10000000 * capture->fps_d / max(capture->fps_n, 1);
++    capture->next_time = time + duration;
++    IMFSample_AddBuffer(sample, buffer);
++    IMFSample_SetSampleTime(sample, time);
++    IMFSample_SetSampleDuration(sample, duration);
++    IMFSample_SetUINT32(sample, &MFSampleExtension_CleanPoint, TRUE);
++
++    token = LIST_ENTRY(list_head(&capture->tokens), struct sample_token, entry);
++    list_remove(&token->entry);
++    if (token->token)
++        IMFSample_SetUnknown(sample, &MFSampleExtension_Token, token->token);
++    IMFMediaEventQueue_QueueEventParamUnk(capture->stream_queue, MEMediaSample, &GUID_NULL, S_OK,
++            (IUnknown *)sample);
++    IMFSample_Release(sample);
++    if (token->token)
++        IUnknown_Release(token->token);
++    free(token);
++}
++
++static DWORD CALLBACK capture_thread(void *arg)
++{
++    struct video_capture *capture = arg;
++    struct wg_camera_read_params params = {.camera = capture->camera, .timeout_ms = 200};
++    UINT32 capacity = 0, generation;
++
++    SetThreadDescription(GetCurrentThread(), L"camera_capture");
++
++    for (;;)
++    {
++        IMFMediaBuffer *buffer = NULL;
++        NTSTATUS status;
++        DWORD length;
++        BYTE *data;
++
++        EnterCriticalSection(&capture->cs);
++        if (capture->exit_thread)
++        {
++            LeaveCriticalSection(&capture->cs);
++            break;
++        }
++        if (capture->state != CAPTURE_RUNNING || list_empty(&capture->tokens) || capture->mode == ~0u)
++        {
++            LeaveCriticalSection(&capture->cs);
++            WaitForSingleObject(capture->wake, INFINITE);
++            continue;
++        }
++        if (!capacity || capacity < capture->modes[capture->mode].sample_size)
++        {
++            const struct wg_camera_mode *mode = &capture->modes[capture->mode];
++            capacity = mode->sample_size ? mode->sample_size : mode->width * mode->height * 2;
++        }
++        generation = capture->generation;
++        LeaveCriticalSection(&capture->cs);
++
++        if (FAILED(MFCreateMemoryBuffer(capacity, &buffer)))
++        {
++            Sleep(10);
++            continue;
++        }
++        IMFMediaBuffer_Lock(buffer, &data, &length, NULL);
++        params.data = (UINT_PTR)data;
++        params.capacity = length;
++        status = WINE_UNIX_CALL(unix_wg_camera_read, &params);
++        IMFMediaBuffer_Unlock(buffer);
++
++        if (status == STATUS_BUFFER_TOO_SMALL)
++            capacity = params.size;
++        else if (status == STATUS_DEVICE_NOT_CONNECTED)
++        {
++            EnterCriticalSection(&capture->cs);
++            if (capture->state == CAPTURE_RUNNING && generation == capture->generation)
++            {
++                WARN("Lost the camera.\n");
++                capture->state = CAPTURE_STOPPED;
++                flush_tokens(capture);
++                stop_camera(capture);
++                IMFMediaEventQueue_QueueEventParamVar(capture->event_queue, MEVideoCaptureDeviceRemoved,
++                        &GUID_NULL, S_OK, NULL);
++                IMFMediaEventQueue_QueueEventParamVar(capture->event_queue, MEError, &GUID_NULL,
++                        MF_E_VIDEO_RECORDING_DEVICE_INVALIDATED, NULL);
++            }
++            LeaveCriticalSection(&capture->cs);
++        }
++        else if (!status)
++        {
++            IMFMediaBuffer_SetCurrentLength(buffer, params.size);
++            EnterCriticalSection(&capture->cs);
++            deliver_frame(capture, buffer, params.pts, generation);
++            LeaveCriticalSection(&capture->cs);
++        }
++        IMFMediaBuffer_Release(buffer);
++    }
++
++    return 0;
++}
++
++static HRESULT WINAPI stream_QueryInterface(IMFMediaStream *iface, REFIID riid, void **out)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++
++    TRACE("%p, %s, %p.\n", iface, debugstr_guid(riid), out);
++
++    if (IsEqualIID(riid, &IID_IMFMediaStream) || IsEqualIID(riid, &IID_IMFMediaEventGenerator)
++            || IsEqualIID(riid, &IID_IUnknown))
++    {
++        *out = &capture->IMFMediaStream_iface;
++        IMFMediaStream_AddRef(iface);
++        return S_OK;
++    }
++
++    WARN("Unsupported %s.\n", debugstr_guid(riid));
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI stream_AddRef(IMFMediaStream *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    return IMFMediaSource_AddRef(&capture->IMFMediaSource_iface);
++}
++
++static ULONG WINAPI stream_Release(IMFMediaStream *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    return IMFMediaSource_Release(&capture->IMFMediaSource_iface);
++}
++
++static HRESULT WINAPI stream_GetEvent(IMFMediaStream *iface, DWORD flags, IMFMediaEvent **event)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    return IMFMediaEventQueue_GetEvent(capture->stream_queue, flags, event);
++}
++
++static HRESULT WINAPI stream_BeginGetEvent(IMFMediaStream *iface, IMFAsyncCallback *callback, IUnknown *state)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    return IMFMediaEventQueue_BeginGetEvent(capture->stream_queue, callback, state);
++}
++
++static HRESULT WINAPI stream_EndGetEvent(IMFMediaStream *iface, IMFAsyncResult *result, IMFMediaEvent **event)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    return IMFMediaEventQueue_EndGetEvent(capture->stream_queue, result, event);
++}
++
++static HRESULT WINAPI stream_QueueEvent(IMFMediaStream *iface, MediaEventType event_type, REFGUID ext_type,
++        HRESULT hr, const PROPVARIANT *value)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    return IMFMediaEventQueue_QueueEventParamVar(capture->stream_queue, event_type, ext_type, hr, value);
++}
++
++static HRESULT WINAPI stream_GetMediaSource(IMFMediaStream *iface, IMFMediaSource **source)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    HRESULT hr = S_OK;
++
++    TRACE("%p, %p.\n", iface, source);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else
++    {
++        *source = &capture->IMFMediaSource_iface;
++        IMFMediaSource_AddRef(*source);
++    }
++    LeaveCriticalSection(&capture->cs);
++    return hr;
++}
++
++static HRESULT WINAPI stream_GetStreamDescriptor(IMFMediaStream *iface, IMFStreamDescriptor **descriptor)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    HRESULT hr = S_OK;
++
++    TRACE("%p, %p.\n", iface, descriptor);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else
++    {
++        *descriptor = capture->stream_descriptor;
++        IMFStreamDescriptor_AddRef(*descriptor);
++    }
++    LeaveCriticalSection(&capture->cs);
++    return hr;
++}
++
++static HRESULT WINAPI stream_RequestSample(IMFMediaStream *iface, IUnknown *token)
++{
++    struct video_capture *capture = impl_from_IMFMediaStream(iface);
++    struct sample_token *entry;
++    HRESULT hr = S_OK;
++
++    TRACE("%p, %p.\n", iface, token);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else if (capture->state == CAPTURE_STOPPED)
++        hr = MF_E_MEDIA_SOURCE_WRONGSTATE;
++    else if (!capture->stream_active)
++        hr = MF_E_INVALIDREQUEST;
++    else if (!(entry = calloc(1, sizeof(*entry))))
++        hr = E_OUTOFMEMORY;
++    else
++    {
++        if ((entry->token = token))
++            IUnknown_AddRef(token);
++        list_add_tail(&capture->tokens, &entry->entry);
++        SetEvent(capture->wake);
++    }
++    LeaveCriticalSection(&capture->cs);
++    return hr;
++}
++
++static const IMFMediaStreamVtbl stream_vtbl =
++{
++    stream_QueryInterface,
++    stream_AddRef,
++    stream_Release,
++    stream_GetEvent,
++    stream_BeginGetEvent,
++    stream_EndGetEvent,
++    stream_QueueEvent,
++    stream_GetMediaSource,
++    stream_GetStreamDescriptor,
++    stream_RequestSample,
++};
++
++static HRESULT WINAPI source_QueryInterface(IMFMediaSource *iface, REFIID riid, void **out)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++
++    TRACE("%p, %s, %p.\n", iface, debugstr_guid(riid), out);
++
++    if (IsEqualIID(riid, &IID_IMFMediaSource) || IsEqualIID(riid, &IID_IMFMediaEventGenerator)
++            || IsEqualIID(riid, &IID_IUnknown))
++    {
++        *out = &capture->IMFMediaSource_iface;
++        IMFMediaSource_AddRef(iface);
++        return S_OK;
++    }
++
++    WARN("Unsupported %s.\n", debugstr_guid(riid));
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG WINAPI source_AddRef(IMFMediaSource *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    ULONG refcount = InterlockedIncrement(&capture->refcount);
++
++    TRACE("%p, refcount %lu.\n", iface, refcount);
++    return refcount;
++}
++
++static void capture_shutdown(struct video_capture *capture)
++{
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++    {
++        LeaveCriticalSection(&capture->cs);
++        return;
++    }
++    capture->state = CAPTURE_SHUTDOWN;
++    capture->exit_thread = TRUE;
++    flush_tokens(capture);
++    SetEvent(capture->wake);
++    LeaveCriticalSection(&capture->cs);
++
++    WaitForSingleObject(capture->thread, INFINITE);
++    CloseHandle(capture->thread);
++    capture->thread = NULL;
++
++    stop_camera(capture);
++    WINE_UNIX_CALL(unix_wg_camera_destroy, &capture->camera);
++    capture->camera = 0;
++
++    IMFMediaEventQueue_Shutdown(capture->event_queue);
++    IMFMediaEventQueue_Shutdown(capture->stream_queue);
++}
++
++static ULONG WINAPI source_Release(IMFMediaSource *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    ULONG refcount = InterlockedDecrement(&capture->refcount);
++
++    TRACE("%p, refcount %lu.\n", iface, refcount);
++
++    if (!refcount)
++    {
++        capture_shutdown(capture);
++        IMFMediaEventQueue_Release(capture->event_queue);
++        IMFMediaEventQueue_Release(capture->stream_queue);
++        IMFPresentationDescriptor_Release(capture->descriptor);
++        IMFStreamDescriptor_Release(capture->stream_descriptor);
++        CloseHandle(capture->wake);
++        capture->cs.DebugInfo->Spare[0] = 0;
++        DeleteCriticalSection(&capture->cs);
++        free(capture->modes);
++        free(capture);
++    }
++
++    return refcount;
++}
++
++static HRESULT WINAPI source_GetEvent(IMFMediaSource *iface, DWORD flags, IMFMediaEvent **event)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    return IMFMediaEventQueue_GetEvent(capture->event_queue, flags, event);
++}
++
++static HRESULT WINAPI source_BeginGetEvent(IMFMediaSource *iface, IMFAsyncCallback *callback, IUnknown *state)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    return IMFMediaEventQueue_BeginGetEvent(capture->event_queue, callback, state);
++}
++
++static HRESULT WINAPI source_EndGetEvent(IMFMediaSource *iface, IMFAsyncResult *result, IMFMediaEvent **event)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    return IMFMediaEventQueue_EndGetEvent(capture->event_queue, result, event);
++}
++
++static HRESULT WINAPI source_QueueEvent(IMFMediaSource *iface, MediaEventType event_type, REFGUID ext_type,
++        HRESULT hr, const PROPVARIANT *value)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    return IMFMediaEventQueue_QueueEventParamVar(capture->event_queue, event_type, ext_type, hr, value);
++}
++
++static HRESULT WINAPI source_GetCharacteristics(IMFMediaSource *iface, DWORD *characteristics)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    HRESULT hr = S_OK;
++
++    TRACE("%p, %p.\n", iface, characteristics);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else
++        *characteristics = MFMEDIASOURCE_IS_LIVE;
++    LeaveCriticalSection(&capture->cs);
++    return hr;
++}
++
++static HRESULT WINAPI source_CreatePresentationDescriptor(IMFMediaSource *iface,
++        IMFPresentationDescriptor **descriptor)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    HRESULT hr;
++
++    TRACE("%p, %p.\n", iface, descriptor);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else
++        hr = IMFPresentationDescriptor_Clone(capture->descriptor, descriptor);
++    LeaveCriticalSection(&capture->cs);
++    return hr;
++}
++
++static HRESULT start_stream(struct video_capture *capture, IMFPresentationDescriptor *descriptor)
++{
++    struct wg_camera_start_params params = {.camera = capture->camera};
++    IMFStreamDescriptor *stream_descriptor;
++    IMFMediaTypeHandler *handler;
++    IMFMediaType *type = NULL;
++    BOOL selected = FALSE;
++    NTSTATUS status;
++    UINT64 rate = 0;
++    UINT32 mode;
++    HRESULT hr;
++
++    if (FAILED(hr = IMFPresentationDescriptor_GetStreamDescriptorByIndex(descriptor, 0, &selected,
++            &stream_descriptor)))
++        return hr;
++    if (selected && SUCCEEDED(hr = IMFStreamDescriptor_GetMediaTypeHandler(stream_descriptor, &handler)))
++    {
++        hr = IMFMediaTypeHandler_GetCurrentMediaType(handler, &type);
++        IMFMediaTypeHandler_Release(handler);
++    }
++    IMFStreamDescriptor_Release(stream_descriptor);
++
++    if (!selected)
++    {
++        stop_camera(capture);
++        capture->stream_active = FALSE;
++        return S_OK;
++    }
++    if (FAILED(hr))
++        return hr;
++    hr = find_mode(capture, type, &mode, &rate);
++    IMFMediaType_Release(type);
++    if (FAILED(hr))
++        return hr;
++
++    if (mode != capture->mode || rate != capture->rate)
++    {
++        stop_camera(capture);
++        params.mode = mode;
++        params.fps_n = rate >> 32;
++        params.fps_d = (UINT32)rate;
++        TRACE("Starting mode %u, %ux%u %s.\n", mode, capture->modes[mode].width, capture->modes[mode].height,
++                debugstr_guid(&capture->modes[mode].subtype));
++        if ((status = WINE_UNIX_CALL(unix_wg_camera_start, &params)))
++        {
++            WARN("Failed to start the camera, status %#lx.\n", status);
++            return status_to_hresult(status);
++        }
++        capture->mode = mode;
++        capture->rate = rate;
++        capture->fps_n = params.fps_n;
++        capture->fps_d = params.fps_d;
++        /* the new pipeline counts from 0 again */
++        capture->have_first_pts = FALSE;
++        capture->start_position = capture->next_time;
++    }
++    return S_OK;
++}
++
++static HRESULT WINAPI source_Start(IMFMediaSource *iface, IMFPresentationDescriptor *descriptor,
++        const GUID *time_format, const PROPVARIANT *position)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    BOOL was_active;
++    HRESULT hr;
++
++    TRACE("%p, %p, %s, %p.\n", iface, descriptor, debugstr_guid(time_format), position);
++
++    if (!descriptor || !position)
++        return E_INVALIDARG;
++    if (time_format && !IsEqualGUID(time_format, &GUID_NULL))
++        return MF_E_UNSUPPORTED_TIME_FORMAT;
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else if (SUCCEEDED(hr = start_stream(capture, descriptor)))
++    {
++        was_active = capture->stream_active && capture->state != CAPTURE_STOPPED;
++        if (capture->state == CAPTURE_STOPPED)
++        {
++            capture->have_first_pts = FALSE;
++            capture->start_position = capture->next_time = position->vt == VT_I8 ? position->hVal.QuadPart : 0;
++        }
++        capture->state = CAPTURE_RUNNING;
++
++        if (capture->mode != ~0u)
++        {
++            IMFMediaEventQueue_QueueEventParamUnk(capture->event_queue, was_active ? MEUpdatedStream : MENewStream,
++                    &GUID_NULL, S_OK, (IUnknown *)&capture->IMFMediaStream_iface);
++            capture->stream_active = TRUE;
++            IMFMediaEventQueue_QueueEventParamVar(capture->stream_queue, MEStreamStarted, &GUID_NULL, S_OK, position);
++        }
++        IMFMediaEventQueue_QueueEventParamVar(capture->event_queue, MESourceStarted, &GUID_NULL, S_OK, position);
++        SetEvent(capture->wake);
++    }
++    LeaveCriticalSection(&capture->cs);
++
++    return hr;
++}
++
++static HRESULT WINAPI source_Stop(IMFMediaSource *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    HRESULT hr = S_OK;
++
++    TRACE("%p.\n", iface);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else
++    {
++        capture->state = CAPTURE_STOPPED;
++        flush_tokens(capture);
++        stop_camera(capture);
++        if (capture->stream_active)
++            IMFMediaEventQueue_QueueEventParamVar(capture->stream_queue, MEStreamStopped, &GUID_NULL, S_OK, NULL);
++        IMFMediaEventQueue_QueueEventParamVar(capture->event_queue, MESourceStopped, &GUID_NULL, S_OK, NULL);
++    }
++    LeaveCriticalSection(&capture->cs);
++
++    return hr;
++}
++
++static HRESULT WINAPI source_Pause(IMFMediaSource *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++    HRESULT hr = S_OK;
++
++    TRACE("%p.\n", iface);
++
++    EnterCriticalSection(&capture->cs);
++    if (capture->state == CAPTURE_SHUTDOWN)
++        hr = MF_E_SHUTDOWN;
++    else if (capture->state != CAPTURE_RUNNING)
++        hr = MF_E_INVALID_STATE_TRANSITION;
++    else
++    {
++        /* the camera keeps running; Start goes on with the newest frame */
++        capture->state = CAPTURE_PAUSED;
++        if (capture->stream_active)
++            IMFMediaEventQueue_QueueEventParamVar(capture->stream_queue, MEStreamPaused, &GUID_NULL, S_OK, NULL);
++        IMFMediaEventQueue_QueueEventParamVar(capture->event_queue, MESourcePaused, &GUID_NULL, S_OK, NULL);
++    }
++    LeaveCriticalSection(&capture->cs);
++
++    return hr;
++}
++
++static HRESULT WINAPI source_Shutdown(IMFMediaSource *iface)
++{
++    struct video_capture *capture = impl_from_IMFMediaSource(iface);
++
++    TRACE("%p.\n", iface);
++
++    capture_shutdown(capture);
++    return S_OK;
++}
++
++static const IMFMediaSourceVtbl source_vtbl =
++{
++    source_QueryInterface,
++    source_AddRef,
++    source_Release,
++    source_GetEvent,
++    source_BeginGetEvent,
++    source_EndGetEvent,
++    source_QueueEvent,
++    source_GetCharacteristics,
++    source_CreatePresentationDescriptor,
++    source_Start,
++    source_Stop,
++    source_Pause,
++    source_Shutdown,
++};
++
++static HRESULT create_descriptors(struct video_capture *capture)
++{
++    IMFMediaTypeHandler *handler;
++    IMFMediaType **types;
++    HRESULT hr = S_OK;
++    UINT32 i, count = 0;
++
++    if (!(types = calloc(capture->mode_count, sizeof(*types))))
++        return E_OUTOFMEMORY;
++    for (i = 0; i < capture->mode_count && SUCCEEDED(hr); ++i)
++        if (SUCCEEDED(hr = create_media_type(&capture->modes[i], &types[i])))
++            count++;
++
++    if (SUCCEEDED(hr))
++        hr = MFCreateStreamDescriptor(0, count, types, &capture->stream_descriptor);
++    if (SUCCEEDED(hr) && SUCCEEDED(hr = IMFStreamDescriptor_GetMediaTypeHandler(capture->stream_descriptor, &handler)))
++    {
++        hr = IMFMediaTypeHandler_SetCurrentMediaType(handler, types[0]);
++        IMFMediaTypeHandler_Release(handler);
++    }
++    if (SUCCEEDED(hr))
++        hr = MFCreatePresentationDescriptor(1, &capture->stream_descriptor, &capture->descriptor);
++    if (SUCCEEDED(hr))
++        hr = IMFPresentationDescriptor_SelectStream(capture->descriptor, 0);
++
++    for (i = 0; i < count; ++i)
++        IMFMediaType_Release(types[i]);
++    free(types);
++    return hr;
++}
++
++HRESULT WINAPI winegstreamer_enum_video_capture(WCHAR ***ret_names, WCHAR ***ret_links, UINT32 *ret_count)
++{
++    struct wg_camera_enum_params enum_params = {0};
++    struct wg_camera_get_device_params params;
++    WCHAR **names = NULL, **links = NULL;
++    UINT32 i, count = 0;
++
++    TRACE("%p, %p, %p.\n", ret_names, ret_links, ret_count);
++
++    *ret_names = *ret_links = NULL;
++    *ret_count = 0;
++    if (!init_gstreamer())
++        return S_OK;
++    if (WINE_UNIX_CALL(unix_wg_camera_enum, &enum_params) || !enum_params.count)
++        return S_OK;
++
++    names = CoTaskMemAlloc(enum_params.count * sizeof(*names));
++    links = CoTaskMemAlloc(enum_params.count * sizeof(*links));
++    if (!names || !links)
++    {
++        CoTaskMemFree(names);
++        CoTaskMemFree(links);
++        return E_OUTOFMEMORY;
++    }
++
++    for (i = 0; i < enum_params.count; ++i)
++    {
++        params.index = i;
++        if (WINE_UNIX_CALL(unix_wg_camera_get_device, &params))
++            break;
++        names[count] = CoTaskMemAlloc((wcslen(params.name) + 1) * sizeof(WCHAR));
++        links[count] = CoTaskMemAlloc((wcslen(params.link) + 1) * sizeof(WCHAR));
++        if (!names[count] || !links[count])
++        {
++            CoTaskMemFree(names[count]);
++            CoTaskMemFree(links[count]);
++            break;
++        }
++        wcscpy(names[count], params.name);
++        wcscpy(links[count], params.link);
++        TRACE("Camera %s, %u formats, %s.\n", debugstr_w(params.name), params.mode_count, debugstr_w(params.link));
++        count++;
++    }
++
++    *ret_names = names;
++    *ret_links = links;
++    *ret_count = count;
++    return S_OK;
++}
++
++HRESULT WINAPI winegstreamer_create_video_capture_source(const WCHAR *link, IMFMediaSource **out)
++{
++    struct wg_camera_create_params create = {{0}};
++    struct wg_camera_get_mode_params params;
++    struct video_capture *capture;
++    NTSTATUS status;
++    HRESULT hr;
++    UINT32 i;
++
++    TRACE("%s, %p.\n", debugstr_w(link), out);
++
++    *out = NULL;
++    if (!link || wcslen(link) >= ARRAY_SIZE(create.link))
++        return MF_E_NOT_FOUND;
++    if (!init_gstreamer())
++        return E_FAIL;
++
++    wcscpy(create.link, link);
++    if ((status = WINE_UNIX_CALL(unix_wg_camera_create, &create)))
++    {
++        /* opened before any list was asked for: look once more */
++        struct wg_camera_enum_params enum_params;
++        WINE_UNIX_CALL(unix_wg_camera_enum, &enum_params);
++        if ((status = WINE_UNIX_CALL(unix_wg_camera_create, &create)))
++            return status_to_hresult(status);
++    }
++    if (!create.mode_count)
++    {
++        WINE_UNIX_CALL(unix_wg_camera_destroy, &create.camera);
++        return MF_E_NOT_FOUND;
++    }
++
++    if (!(capture = calloc(1, sizeof(*capture))))
++    {
++        WINE_UNIX_CALL(unix_wg_camera_destroy, &create.camera);
++        return E_OUTOFMEMORY;
++    }
++    capture->IMFMediaSource_iface.lpVtbl = &source_vtbl;
++    capture->IMFMediaStream_iface.lpVtbl = &stream_vtbl;
++    capture->refcount = 1;
++    capture->camera = create.camera;
++    capture->mode = ~0u;
++    list_init(&capture->tokens);
++    InitializeCriticalSectionEx(&capture->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
++    capture->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": video_capture.cs");
++
++    if (!(capture->modes = calloc(create.mode_count, sizeof(*capture->modes))))
++    {
++        hr = E_OUTOFMEMORY;
++        goto fail;
++    }
++    params.camera = capture->camera;
++    for (i = 0; i < create.mode_count; ++i)
++    {
++        params.index = i;
++        if (WINE_UNIX_CALL(unix_wg_camera_get_mode, &params))
++            break;
++        capture->modes[capture->mode_count++] = params.mode;
++    }
++
++    if (FAILED(hr = MFCreateEventQueue(&capture->event_queue))
++            || FAILED(hr = MFCreateEventQueue(&capture->stream_queue))
++            || FAILED(hr = create_descriptors(capture)))
++        goto fail;
++    if (!(capture->wake = CreateEventW(NULL, FALSE, FALSE, NULL))
++            || !(capture->thread = CreateThread(NULL, 0, capture_thread, capture, 0, NULL)))
++    {
++        hr = HRESULT_FROM_WIN32(GetLastError());
++        goto fail;
++    }
++
++    TRACE("Created camera source %p with %u formats.\n", capture, capture->mode_count);
++    *out = &capture->IMFMediaSource_iface;
++    return S_OK;
++
++fail:
++    WINE_UNIX_CALL(unix_wg_camera_destroy, &capture->camera);
++    if (capture->wake) CloseHandle(capture->wake);
++    if (capture->descriptor) IMFPresentationDescriptor_Release(capture->descriptor);
++    if (capture->stream_descriptor) IMFStreamDescriptor_Release(capture->stream_descriptor);
++    if (capture->stream_queue) IMFMediaEventQueue_Release(capture->stream_queue);
++    if (capture->event_queue) IMFMediaEventQueue_Release(capture->event_queue);
++    capture->cs.DebugInfo->Spare[0] = 0;
++    DeleteCriticalSection(&capture->cs);
++    free(capture->modes);
++    free(capture);
++    return hr;
++}
+diff --git a/dlls/winegstreamer/wg_camera.c b/dlls/winegstreamer/wg_camera.c
+new file mode 100644
+index 0000000..875c669
+--- /dev/null
++++ b/dlls/winegstreamer/wg_camera.c
+@@ -0,0 +1,941 @@
++/*
++ * Video capture devices, read with GStreamer
++ *
++ * Copyright 2026 Raye Linux
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include "config.h"
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include <gst/gst.h>
++#include <gst/video/video.h>
++
++#include "ntstatus.h"
++#include "winternl.h"
++#include "mfapi.h"
++
++#include "unix_private.h"
++
++#define MAX_CAMERAS 16
++#define MAX_MODES 160
++#define MAX_RATES 8
++
++struct camera_mode
++{
++    struct wg_camera_mode info;
++    GstCaps *src_caps;  /* what the device is asked for */
++    GstCaps *out_caps;  /* what the program gets */
++    bool decode;
++};
++
++struct camera_device
++{
++    char path[64];      /* empty for the test camera */
++    WCHAR name[128];
++    WCHAR link[192];
++    struct camera_mode modes[MAX_MODES];
++    UINT32 mode_count;
++};
++
++struct wg_camera
++{
++    struct camera_device device;
++    bool test;
++
++    GstElement *pipeline;
++    GstPad *my_sink;
++    const struct camera_mode *mode;
++    GstCaps *out_caps;      /* mode->out_caps at the rate asked for */
++    UINT32 fps_n, fps_d;
++
++    GMutex lock;
++    GCond cond;
++    GstBuffer *buffer;
++    GstVideoInfo info;
++    bool running, error;
++};
++
++static GMutex devices_lock;
++static struct camera_device *devices;
++static UINT32 device_count;
++
++static const struct
++{
++    const char *gst;
++    const GUID *subtype;
++}
++raw_formats[] =
++{
++    {"NV12", &MFVideoFormat_NV12},
++    {"YUY2", &MFVideoFormat_YUY2},
++    {"I420", &MFVideoFormat_I420},
++    {"YV12", &MFVideoFormat_YV12},
++    {"UYVY", &MFVideoFormat_UYVY},
++    {"BGRx", &MFVideoFormat_RGB32},
++    {"BGR",  &MFVideoFormat_RGB24},
++};
++
++static void free_modes(struct camera_device *device)
++{
++    UINT32 i;
++
++    for (i = 0; i < device->mode_count; ++i)
++    {
++        gst_caps_unref(device->modes[i].src_caps);
++        gst_caps_unref(device->modes[i].out_caps);
++    }
++    device->mode_count = 0;
++}
++
++static void free_devices(void)
++{
++    UINT32 i;
++
++    for (i = 0; i < device_count; ++i)
++        free_modes(&devices[i]);
++    free(devices);
++    devices = NULL;
++    device_count = 0;
++}
++
++static bool get_int_max(const GstStructure *structure, const char *field, int *out)
++{
++    const GValue *value = gst_structure_get_value(structure, field);
++    unsigned int i;
++
++    if (!value)
++        return false;
++    if (G_VALUE_HOLDS_INT(value))
++        *out = g_value_get_int(value);
++    else if (GST_VALUE_HOLDS_INT_RANGE(value))
++        *out = gst_value_get_int_range_max(value);
++    else if (GST_VALUE_HOLDS_LIST(value))
++    {
++        *out = 0;
++        for (i = 0; i < gst_value_list_get_size(value); ++i)
++        {
++            const GValue *item = gst_value_list_get_value(value, i);
++            if (G_VALUE_HOLDS_INT(item) && g_value_get_int(item) > *out)
++                *out = g_value_get_int(item);
++        }
++    }
++    else
++        return false;
++    return *out > 0;
++}
++
++static void update_rate(const GValue *value, GValue *max, GValue *min)
++{
++    if (!gst_value_get_fraction_numerator(value))
++        return;
++    if (!G_IS_VALUE(max) || gst_value_compare(value, max) == GST_VALUE_GREATER_THAN)
++    {
++        if (G_IS_VALUE(max)) g_value_unset(max);
++        g_value_init(max, GST_TYPE_FRACTION);
++        g_value_copy(value, max);
++    }
++    if (!G_IS_VALUE(min) || gst_value_compare(value, min) == GST_VALUE_LESS_THAN)
++    {
++        if (G_IS_VALUE(min)) g_value_unset(min);
++        g_value_init(min, GST_TYPE_FRACTION);
++        g_value_copy(value, min);
++    }
++}
++
++static void get_rates(const GstStructure *structure, struct wg_camera_mode *info)
++{
++    const GValue *value = gst_structure_get_value(structure, "framerate");
++    GValue max = G_VALUE_INIT, min = G_VALUE_INIT;
++    unsigned int i;
++
++    if (value && GST_VALUE_HOLDS_FRACTION(value))
++        update_rate(value, &max, &min);
++    else if (value && GST_VALUE_HOLDS_FRACTION_RANGE(value))
++    {
++        update_rate(gst_value_get_fraction_range_max(value), &max, &min);
++        update_rate(gst_value_get_fraction_range_min(value), &max, &min);
++    }
++    else if (value && GST_VALUE_HOLDS_LIST(value))
++    {
++        for (i = 0; i < gst_value_list_get_size(value); ++i)
++        {
++            const GValue *item = gst_value_list_get_value(value, i);
++            if (GST_VALUE_HOLDS_FRACTION(item))
++                update_rate(item, &max, &min);
++        }
++    }
++
++    /* no rate, or only "variable": say 30, like most cameras */
++    info->fps_n = info->fps_min_n = 30;
++    info->fps_d = info->fps_min_d = 1;
++    if (G_IS_VALUE(&max))
++    {
++        info->fps_n = gst_value_get_fraction_numerator(&max);
++        info->fps_d = gst_value_get_fraction_denominator(&max);
++        g_value_unset(&max);
++    }
++    if (G_IS_VALUE(&min))
++    {
++        info->fps_min_n = gst_value_get_fraction_numerator(&min);
++        info->fps_min_d = gst_value_get_fraction_denominator(&min);
++        g_value_unset(&min);
++    }
++}
++
++/* Each rate a camera lists is a type of its own, as on Windows, so a
++ * program picks 15 or 30 frames a second the way it picks a size. Highest
++ * first; a continuous range only gives its highest. */
++static unsigned int get_rate_list(const GstStructure *structure, const struct wg_camera_mode *range,
++        UINT32 rates[][2])
++{
++    const GValue *value = gst_structure_get_value(structure, "framerate");
++    unsigned int i, j, count = 0;
++
++    if (value && GST_VALUE_HOLDS_LIST(value))
++    {
++        for (i = 0; i < gst_value_list_get_size(value) && count < MAX_RATES; ++i)
++        {
++            const GValue *item = gst_value_list_get_value(value, i);
++            UINT32 n, d;
++
++            if (!GST_VALUE_HOLDS_FRACTION(item) || !(n = gst_value_get_fraction_numerator(item)))
++                continue;
++            d = gst_value_get_fraction_denominator(item);
++            for (j = 0; j < count; ++j)
++                if ((UINT64)rates[j][0] * d == (UINT64)n * rates[j][1]) break;
++            if (j < count)
++                continue;
++            for (j = count; j > 0 && (UINT64)rates[j - 1][0] * d < (UINT64)n * rates[j - 1][1]; --j)
++            {
++                rates[j][0] = rates[j - 1][0];
++                rates[j][1] = rates[j - 1][1];
++            }
++            rates[j][0] = n;
++            rates[j][1] = d;
++            count++;
++        }
++    }
++    if (!count)
++    {
++        rates[0][0] = range->fps_n;
++        rates[0][1] = range->fps_d;
++        count = 1;
++    }
++    return count;
++}
++
++static struct camera_mode *find_mode(struct camera_device *device, const GUID *subtype,
++        UINT32 width, UINT32 height, UINT32 fps_n, UINT32 fps_d)
++{
++    UINT32 i;
++
++    for (i = 0; i < device->mode_count; ++i)
++    {
++        struct wg_camera_mode *info = &device->modes[i].info;
++        if (IsEqualGUID(&info->subtype, subtype) && info->width == width && info->height == height
++                && (UINT64)info->fps_n * fps_d == (UINT64)fps_n * info->fps_d)
++            return &device->modes[i];
++    }
++    return NULL;
++}
++
++static bool raw_info_from_caps(GstVideoInfo *info, GstCaps *caps)
++{
++    if (!gst_structure_has_name(gst_caps_get_structure(caps, 0), "video/x-raw")
++            || !gst_video_info_from_caps(info, caps))
++    {
++        gst_video_info_init(info);
++        return false;
++    }
++    return true;
++}
++
++static void add_mode(struct camera_device *device, const GUID *subtype, const char *format,
++        const struct wg_camera_mode *rates, UINT32 width, UINT32 height, bool decode)
++{
++    struct camera_mode *mode;
++    GstVideoInfo video_info;
++
++    if (device->mode_count == MAX_MODES || find_mode(device, subtype, width, height, rates->fps_n, rates->fps_d))
++        return;
++    mode = &device->modes[device->mode_count];
++    memset(mode, 0, sizeof(*mode));
++    mode->info = *rates;
++    mode->info.subtype = *subtype;
++    mode->info.width = width;
++    mode->info.height = height;
++    mode->decode = decode;
++
++    if (decode || !format)
++        mode->src_caps = gst_caps_new_simple("image/jpeg", "width", G_TYPE_INT, width,
++                "height", G_TYPE_INT, height, "framerate", GST_TYPE_FRACTION, rates->fps_n, rates->fps_d, NULL);
++    else
++        mode->src_caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, format,
++                "width", G_TYPE_INT, width, "height", G_TYPE_INT, height,
++                "framerate", GST_TYPE_FRACTION, rates->fps_n, rates->fps_d, NULL);
++
++    if (decode)
++        mode->out_caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "NV12",
++                "width", G_TYPE_INT, width, "height", G_TYPE_INT, height,
++                "framerate", GST_TYPE_FRACTION, rates->fps_n, rates->fps_d, NULL);
++    else
++        mode->out_caps = gst_caps_ref(mode->src_caps);
++
++    /* raw frames go out tightly packed, the way Media Foundation lays them */
++    if (raw_info_from_caps(&video_info, mode->out_caps))
++    {
++        mode->info.sample_size = video_info.size;
++        mode->info.stride = video_info.stride[0];
++    }
++    device->mode_count++;
++}
++
++static void add_modes(struct camera_device *device, GstCaps *caps)
++{
++    struct camera_device jpeg = {0};
++    unsigned int i, j;
++
++    for (i = 0; i < gst_caps_get_size(caps); ++i)
++    {
++        const GstStructure *structure = gst_caps_get_structure(caps, i);
++        GstCapsFeatures *features = gst_caps_get_features(caps, i);
++        const char *name = gst_structure_get_name(structure), *format;
++        struct wg_camera_mode range, rates;
++        UINT32 rate_list[MAX_RATES][2];
++        unsigned int count, k;
++        int width, height;
++
++        if (features && !gst_caps_features_is_any(features)
++                && !gst_caps_features_is_equal(features, GST_CAPS_FEATURES_MEMORY_SYSTEM_MEMORY))
++            continue;
++        if (!get_int_max(structure, "width", &width) || !get_int_max(structure, "height", &height))
++            continue;
++        get_rates(structure, &range);
++        count = get_rate_list(structure, &range, rate_list);
++
++        for (k = 0; k < count; ++k)
++        {
++            rates = range;
++            rates.fps_n = rate_list[k][0];
++            rates.fps_d = rate_list[k][1];
++
++            if (!strcmp(name, "image/jpeg"))
++            {
++                add_mode(device, &MFVideoFormat_MJPG, NULL, &rates, width, height, false);
++                add_mode(&jpeg, &MFVideoFormat_MJPG, NULL, &rates, width, height, false);
++            }
++            else if (!strcmp(name, "video/x-raw") && (format = gst_structure_get_string(structure, "format")))
++            {
++                for (j = 0; j < ARRAY_SIZE(raw_formats); ++j)
++                {
++                    if (strcmp(format, raw_formats[j].gst)) continue;
++                    add_mode(device, raw_formats[j].subtype, format, &rates, width, height, false);
++                    break;
++                }
++            }
++        }
++    }
++
++    /* Most USB cameras give their large sizes, or their full rate, only as
++     * MJPG. Programs that only take raw frames get those too, decoded. */
++    for (i = 0; i < jpeg.mode_count; ++i)
++    {
++        const struct wg_camera_mode *info = &jpeg.modes[i].info;
++        bool covered = false;
++
++        for (j = 0; j < device->mode_count; ++j)
++        {
++            const struct wg_camera_mode *raw = &device->modes[j].info;
++            if (IsEqualGUID(&raw->subtype, &MFVideoFormat_MJPG)) continue;
++            if (raw->width == info->width && raw->height == info->height
++                    && (UINT64)raw->fps_n * info->fps_d >= (UINT64)info->fps_n * raw->fps_d)
++                covered = true;
++        }
++        if (!covered)
++            add_mode(device, &MFVideoFormat_NV12, "NV12", info, info->width, info->height, true);
++    }
++    free_modes(&jpeg);
++}
++
++/* "Integrated Camera: Integrated C" is how a laptop camera names itself
++ * through V4L2; Windows says "Integrated Camera". */
++static void clean_name(const char *in, char *out, size_t size)
++{
++    const char *colon;
++    size_t len;
++
++    snprintf(out, size, "%s", in);
++    if ((colon = strstr(out, ": ")))
++    {
++        size_t head = colon - out, tail = strlen(colon + 2);
++        if (tail && (!strncmp(out, colon + 2, tail) || (tail >= head && !strncmp(out, colon + 2, head))))
++            out[head] = 0;
++    }
++    len = strlen(out);
++    while (len && out[len - 1] == ' ')
++        out[--len] = 0;
++    if (!len)
++        snprintf(out, size, "%s", "USB Video Device");
++}
++
++static void set_wide(WCHAR *dst, size_t count, const char *src)
++{
++    DWORD len = ntdll_umbstowcs(src, strlen(src), dst, count - 1);
++    dst[len] = 0;
++}
++
++static struct camera_device *new_device(void)
++{
++    struct camera_device *list;
++
++    if (device_count == MAX_CAMERAS || !(list = realloc(devices, (device_count + 1) * sizeof(*devices))))
++        return NULL;
++    devices = list;
++    memset(&devices[device_count], 0, sizeof(*devices));
++    return &devices[device_count];
++}
++
++static void add_v4l2_device(GstDevice *gst_device)
++{
++    const char *path, *vendor, *product, *bus_path;
++    struct camera_device *device;
++    GstStructure *props;
++    char name[128], link[192];
++    gchar *display, *lower;
++    GstCaps *caps;
++
++    if (!gst_device_has_classes(gst_device, "Video/Source"))
++        return;
++    if (!(props = gst_device_get_properties(gst_device)))
++        return;
++    if (!(path = gst_structure_get_string(props, "device.path"))
++            && !(path = gst_structure_get_string(props, "api.v4l2.path")))
++        goto done;
++    if (!(device = new_device()))
++        goto done;
++    snprintf(device->path, sizeof(device->path), "%s", path);
++
++    if ((caps = gst_device_get_caps(gst_device)))
++    {
++        add_modes(device, caps);
++        gst_caps_unref(caps);
++    }
++    /* infrared face login cameras only give GREY: nothing a program can show */
++    if (!device->mode_count)
++        goto done;
++
++    display = gst_device_get_display_name(gst_device);
++    clean_name(display ? display : "", name, sizeof(name));
++    g_free(display);
++    set_wide(device->name, ARRAY_SIZE(device->name), name);
++
++    vendor = gst_structure_get_string(props, "device.vendor.id");
++    product = gst_structure_get_string(props, "device.product.id");
++    if (!(bus_path = gst_structure_get_string(props, "device.bus_path")))
++        bus_path = path;
++    if (vendor && product && strlen(vendor) == 4 && strlen(product) == 4)
++        snprintf(link, sizeof(link), "\\\\?\\usb#vid_%s&pid_%s&mi_00#7&%08x&0&0000"
++                "#{e5323777-f976-4f5b-9b55-b94699c46e44}\\global", vendor, product, g_str_hash(bus_path));
++    else
++        snprintf(link, sizeof(link), "\\\\?\\root#camera#%08x#{e5323777-f976-4f5b-9b55-b94699c46e44}\\global",
++                g_str_hash(path));
++    lower = g_ascii_strdown(link, -1);
++    set_wide(device->link, ARRAY_SIZE(device->link), lower);
++    g_free(lower);
++    device_count++;
++
++done:
++    gst_structure_free(props);
++}
++
++/* A camera made of a test pattern, so the whole path can be checked on a
++ * machine without one. */
++static void add_test_device(const char *name)
++{
++    static const char modes[] =
++            "video/x-raw, format=YUY2, width=640, height=480, framerate={ 30/1, 15/1 }; "
++            "video/x-raw, format=NV12, width=1280, height=720, framerate=30/1; "
++            "image/jpeg, width=1280, height=720, framerate=30/1; "
++            "image/jpeg, width=1920, height=1080, framerate=30/1";
++    struct camera_device *device;
++    GstCaps *caps;
++
++    if (!(device = new_device()) || !(caps = gst_caps_from_string(modes)))
++        return;
++    add_modes(device, caps);
++    gst_caps_unref(caps);
++    set_wide(device->name, ARRAY_SIZE(device->name), name);
++    set_wide(device->link, ARRAY_SIZE(device->link),
++            "\\\\?\\root#camera#test#{e5323777-f976-4f5b-9b55-b94699c46e44}\\global");
++    device_count++;
++}
++
++NTSTATUS wg_camera_enum(void *args)
++{
++    struct wg_camera_enum_params *params = args;
++    GstDeviceProvider *provider;
++    const char *test;
++    GList *list, *l;
++
++    g_mutex_lock(&devices_lock);
++    free_devices();
++
++    if ((test = getenv("WINE_GST_TEST_CAMERA")) && *test)
++        add_test_device(test);
++
++    if ((provider = gst_device_provider_factory_get_by_name("v4l2deviceprovider")))
++    {
++        list = gst_device_provider_get_devices(provider);
++        for (l = list; l; l = l->next)
++            add_v4l2_device(l->data);
++        g_list_free_full(list, gst_object_unref);
++        gst_object_unref(provider);
++    }
++    else
++        GST_WARNING("No v4l2 device provider, are the GStreamer \"good\" plugins installed?");
++
++    params->count = device_count;
++    g_mutex_unlock(&devices_lock);
++    return STATUS_SUCCESS;
++}
++
++NTSTATUS wg_camera_get_device(void *args)
++{
++    struct wg_camera_get_device_params *params = args;
++    NTSTATUS status = STATUS_NO_MORE_ENTRIES;
++
++    g_mutex_lock(&devices_lock);
++    if (params->index < device_count)
++    {
++        memcpy(params->name, devices[params->index].name, sizeof(params->name));
++        memcpy(params->link, devices[params->index].link, sizeof(params->link));
++        params->mode_count = devices[params->index].mode_count;
++        status = STATUS_SUCCESS;
++    }
++    g_mutex_unlock(&devices_lock);
++    return status;
++}
++
++static struct wg_camera *get_camera(wg_camera_t camera)
++{
++    return (struct wg_camera *)(ULONG_PTR)camera;
++}
++
++NTSTATUS wg_camera_create(void *args)
++{
++    struct wg_camera_create_params *params = args;
++    struct wg_camera *camera = NULL;
++    UINT32 i, j;
++
++    params->camera = 0;
++    g_mutex_lock(&devices_lock);
++    for (i = 0; i < device_count; ++i)
++    {
++        if (memcmp(devices[i].link, params->link, sizeof(params->link))) continue;
++        if (!(camera = calloc(1, sizeof(*camera)))) break;
++        camera->device = devices[i];
++        for (j = 0; j < camera->device.mode_count; ++j)
++        {
++            gst_caps_ref(camera->device.modes[j].src_caps);
++            gst_caps_ref(camera->device.modes[j].out_caps);
++        }
++        camera->test = !camera->device.path[0];
++        break;
++    }
++    g_mutex_unlock(&devices_lock);
++
++    if (!camera)
++        return STATUS_NOT_FOUND;
++    g_mutex_init(&camera->lock);
++    g_cond_init(&camera->cond);
++    params->camera = (ULONG_PTR)camera;
++    params->mode_count = camera->device.mode_count;
++    return STATUS_SUCCESS;
++}
++
++NTSTATUS wg_camera_get_mode(void *args)
++{
++    struct wg_camera_get_mode_params *params = args;
++    struct wg_camera *camera = get_camera(params->camera);
++
++    if (params->index >= camera->device.mode_count)
++        return STATUS_NO_MORE_ENTRIES;
++    params->mode = camera->device.modes[params->index].info;
++    return STATUS_SUCCESS;
++}
++
++static GstFlowReturn sink_chain_cb(GstPad *pad, GstObject *parent, GstBuffer *buffer)
++{
++    struct wg_camera *camera = gst_pad_get_element_private(pad);
++
++    g_mutex_lock(&camera->lock);
++    /* a live source: keep the newest frame only */
++    if (camera->buffer)
++        gst_buffer_unref(camera->buffer);
++    camera->buffer = buffer;
++    g_cond_broadcast(&camera->cond);
++    g_mutex_unlock(&camera->lock);
++    return GST_FLOW_OK;
++}
++
++static gboolean sink_event_cb(GstPad *pad, GstObject *parent, GstEvent *event)
++{
++    struct wg_camera *camera = gst_pad_get_element_private(pad);
++    GstCaps *caps;
++
++    if (GST_EVENT_TYPE(event) == GST_EVENT_CAPS)
++    {
++        gst_event_parse_caps(event, &caps);
++        g_mutex_lock(&camera->lock);
++        raw_info_from_caps(&camera->info, caps);
++        g_mutex_unlock(&camera->lock);
++    }
++    else if (GST_EVENT_TYPE(event) == GST_EVENT_EOS)
++    {
++        g_mutex_lock(&camera->lock);
++        camera->error = true;
++        g_cond_broadcast(&camera->cond);
++        g_mutex_unlock(&camera->lock);
++    }
++    gst_event_unref(event);
++    return TRUE;
++}
++
++static gboolean sink_query_cb(GstPad *pad, GstObject *parent, GstQuery *query)
++{
++    struct wg_camera *camera = gst_pad_get_element_private(pad);
++    GstCaps *filter, *caps;
++
++    switch (GST_QUERY_TYPE(query))
++    {
++    case GST_QUERY_CAPS:
++        gst_query_parse_caps(query, &filter);
++        if (filter)
++            caps = gst_caps_intersect_full(filter, camera->out_caps, GST_CAPS_INTERSECT_FIRST);
++        else
++            caps = gst_caps_ref(camera->out_caps);
++        gst_query_set_caps_result(query, caps);
++        gst_caps_unref(caps);
++        return TRUE;
++    case GST_QUERY_ACCEPT_CAPS:
++        gst_query_parse_accept_caps(query, &caps);
++        gst_query_set_accept_caps_result(query, gst_caps_can_intersect(caps, camera->out_caps));
++        return TRUE;
++    default:
++        return gst_pad_query_default(pad, parent, query);
++    }
++}
++
++static GstElement *create_source(struct wg_camera *camera, const struct camera_mode *mode)
++{
++    GstElement *bin, *src, *filter, *enc, *first = NULL, *last = NULL;
++    GstCaps *caps;
++    GstPad *pad;
++
++    if (!camera->test)
++    {
++        if ((src = create_element("v4l2src", "good")))
++            g_object_set(src, "device", camera->device.path, NULL);
++        return src;
++    }
++
++    bin = gst_bin_new(NULL);
++    if (!(src = create_element("videotestsrc", "base")))
++        goto fail;
++    g_object_set(src, "is-live", TRUE, "pattern", 18 /* ball */, NULL);
++    if (!append_element(bin, src, &first, &last))
++        goto fail;
++    if (!mode->decode && !IsEqualGUID(&mode->info.subtype, &MFVideoFormat_MJPG))
++        goto done;
++
++    if (!(filter = create_element("capsfilter", "base")))
++        goto fail;
++    caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "I420",
++            "width", G_TYPE_INT, mode->info.width, "height", G_TYPE_INT, mode->info.height, NULL);
++    g_object_set(filter, "caps", caps, NULL);
++    gst_caps_unref(caps);
++    if (!append_element(bin, filter, &first, &last)
++            || !(enc = create_element("jpegenc", "good"))
++            || !append_element(bin, enc, &first, &last))
++        goto fail;
++
++done:
++    pad = gst_element_get_static_pad(last, "src");
++    gst_element_add_pad(bin, gst_ghost_pad_new("src", pad));
++    gst_object_unref(pad);
++    return bin;
++
++fail:
++    gst_object_unref(bin);
++    return NULL;
++}
++
++static void stop_pipeline(struct wg_camera *camera)
++{
++    GstElement *pipeline;
++
++    g_mutex_lock(&camera->lock);
++    camera->running = false;
++    pipeline = camera->pipeline;
++    camera->pipeline = NULL;
++    if (camera->buffer)
++        gst_buffer_unref(camera->buffer);
++    camera->buffer = NULL;
++    g_cond_broadcast(&camera->cond);
++    g_mutex_unlock(&camera->lock);
++
++    if (pipeline)
++    {
++        gst_element_set_state(pipeline, GST_STATE_NULL);
++        gst_object_unref(pipeline);
++    }
++    if (camera->my_sink)
++    {
++        gst_pad_set_active(camera->my_sink, FALSE);
++        gst_object_unref(camera->my_sink);
++        camera->my_sink = NULL;
++    }
++    camera->mode = NULL;
++
++    g_mutex_lock(&camera->lock);
++    if (camera->buffer)
++        gst_buffer_unref(camera->buffer);
++    camera->buffer = NULL;
++    camera->error = false;
++    g_mutex_unlock(&camera->lock);
++}
++
++/* An unplugged camera or one another program holds: v4l2src posts an error. */
++static bool bus_has_error(GstBus *bus, const char *path)
++{
++    GstMessage *message;
++    GError *error;
++    gchar *debug;
++
++    if (!bus || !(message = gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR)))
++        return false;
++    gst_message_parse_error(message, &error, &debug);
++    GST_ERROR("Camera %s: %s (%s).", path, error->message, debug);
++    g_error_free(error);
++    g_free(debug);
++    gst_message_unref(message);
++    return true;
++}
++
++NTSTATUS wg_camera_start(void *args)
++{
++    struct wg_camera_start_params *params = args;
++    struct wg_camera *camera = get_camera(params->camera);
++    GstElement *first = NULL, *last = NULL, *element;
++    const struct camera_mode *mode;
++    GstCaps *src_caps, *out_caps;
++    GstStateChangeReturn ret;
++    GstElement *pipeline;
++    UINT32 fps_n, fps_d;
++    bool failed;
++    GstBus *bus;
++
++    if (params->mode >= camera->device.mode_count)
++        return STATUS_INVALID_PARAMETER;
++    mode = &camera->device.modes[params->mode];
++
++    /* a rate the camera can do, or its highest */
++    fps_n = mode->info.fps_n;
++    fps_d = mode->info.fps_d;
++    if (params->fps_n && params->fps_d
++            && (UINT64)params->fps_n * mode->info.fps_d <= (UINT64)mode->info.fps_n * params->fps_d
++            && (UINT64)params->fps_n * mode->info.fps_min_d >= (UINT64)mode->info.fps_min_n * params->fps_d)
++    {
++        fps_n = params->fps_n;
++        fps_d = params->fps_d;
++    }
++
++    params->fps_n = fps_n;
++    params->fps_d = fps_d;
++    if (camera->pipeline && camera->mode == mode && camera->fps_n == fps_n && camera->fps_d == fps_d)
++        return STATUS_SUCCESS;
++    stop_pipeline(camera);
++
++    src_caps = gst_caps_copy(mode->src_caps);
++    out_caps = gst_caps_copy(mode->out_caps);
++    gst_caps_set_simple(src_caps, "framerate", GST_TYPE_FRACTION, fps_n, fps_d, NULL);
++    gst_caps_set_simple(out_caps, "framerate", GST_TYPE_FRACTION, fps_n, fps_d, NULL);
++    if (camera->out_caps)
++        gst_caps_unref(camera->out_caps);
++    camera->out_caps = out_caps;
++    camera->mode = mode;
++    camera->fps_n = fps_n;
++    camera->fps_d = fps_d;
++
++    pipeline = gst_pipeline_new("wg_camera");
++    if (!(element = create_source(camera, mode)) || !append_element(pipeline, element, &first, &last))
++        goto fail;
++    if (!(element = create_element("capsfilter", "base")) || !append_element(pipeline, element, &first, &last))
++        goto fail;
++    g_object_set(element, "caps", src_caps, NULL);
++    gst_caps_unref(src_caps);
++    src_caps = NULL;
++    if (mode->decode)
++    {
++        if (!(element = create_element("jpegdec", "good")) || !append_element(pipeline, element, &first, &last)
++                || !(element = create_element("videoconvert", "base"))
++                || !append_element(pipeline, element, &first, &last))
++            goto fail;
++    }
++
++    camera->my_sink = gst_pad_new("sink", GST_PAD_SINK);
++    gst_pad_set_element_private(camera->my_sink, camera);
++    gst_pad_set_chain_function(camera->my_sink, sink_chain_cb);
++    gst_pad_set_event_function(camera->my_sink, sink_event_cb);
++    gst_pad_set_query_function(camera->my_sink, sink_query_cb);
++    if (!link_element_to_sink(last, camera->my_sink) || !gst_pad_set_active(camera->my_sink, TRUE))
++        goto fail;
++
++    g_mutex_lock(&camera->lock);
++    gst_video_info_init(&camera->info);
++    camera->pipeline = pipeline;
++    camera->running = true;
++    g_mutex_unlock(&camera->lock);
++
++    gst_element_set_state(pipeline, GST_STATE_PLAYING);
++    ret = gst_element_get_state(pipeline, NULL, NULL, 2 * GST_SECOND);
++    bus = gst_element_get_bus(pipeline);
++    failed = bus_has_error(bus, camera->device.path);
++    gst_object_unref(bus);
++    if (ret == GST_STATE_CHANGE_FAILURE || failed)
++    {
++        GST_ERROR("Failed to start camera %s.", camera->device.path);
++        stop_pipeline(camera);
++        return STATUS_DEVICE_BUSY;
++    }
++    return STATUS_SUCCESS;
++
++fail:
++    if (src_caps)
++        gst_caps_unref(src_caps);
++    if (!camera->pipeline)
++        gst_object_unref(pipeline);
++    stop_pipeline(camera);
++    return STATUS_UNSUCCESSFUL;
++}
++
++NTSTATUS wg_camera_stop(void *args)
++{
++    struct wg_camera *camera = get_camera(*(wg_camera_t *)args);
++
++    stop_pipeline(camera);
++    return STATUS_SUCCESS;
++}
++
++NTSTATUS wg_camera_read(void *args)
++{
++    struct wg_camera_read_params *params = args;
++    struct wg_camera *camera = get_camera(params->camera);
++    BYTE *data = (BYTE *)(ULONG_PTR)params->data;
++    gint64 deadline = g_get_monotonic_time() + params->timeout_ms * G_TIME_SPAN_MILLISECOND;
++    GstVideoFrame src, dst;
++    GstBuffer *buffer, *out;
++    GstBus *bus = NULL;
++    GstVideoInfo info;
++    bool error, copied;
++
++    params->size = 0;
++    if (!data)
++        return STATUS_INVALID_PARAMETER;
++    g_mutex_lock(&camera->lock);
++    while (!camera->buffer && camera->running && !camera->error)
++        if (!g_cond_wait_until(&camera->cond, &camera->lock, deadline))
++            break;
++    buffer = camera->buffer;
++    camera->buffer = NULL;
++    info = camera->info;
++    error = camera->error;
++    if (!buffer && camera->pipeline)
++        bus = gst_element_get_bus(camera->pipeline);
++    g_mutex_unlock(&camera->lock);
++
++    if (!buffer)
++    {
++        if (bus_has_error(bus, camera->device.path))
++            error = true;
++        if (bus)
++            gst_object_unref(bus);
++        return error ? STATUS_DEVICE_NOT_CONNECTED : STATUS_TIMEOUT;
++    }
++
++    if (GST_BUFFER_PTS_IS_VALID(buffer))
++        params->pts = GST_BUFFER_PTS(buffer) / 100;
++    else
++        params->pts = g_get_monotonic_time() * 10;
++
++    if (GST_VIDEO_INFO_FORMAT(&info) == GST_VIDEO_FORMAT_UNKNOWN)
++    {
++        params->size = gst_buffer_get_size(buffer);
++        if (params->size > params->capacity)
++            goto too_small;
++        gst_buffer_extract(buffer, 0, data, params->size);
++        gst_buffer_unref(buffer);
++        return STATUS_SUCCESS;
++    }
++
++    params->size = info.size;
++    if (params->size > params->capacity)
++        goto too_small;
++    out = gst_buffer_new_wrapped_full(0, data, params->capacity, 0, info.size, NULL, NULL);
++    if (!gst_video_frame_map(&src, &info, buffer, GST_MAP_READ))
++    {
++        gst_buffer_unref(out);
++        gst_buffer_unref(buffer);
++        return STATUS_UNSUCCESSFUL;
++    }
++    copied = gst_video_frame_map(&dst, &info, out, GST_MAP_WRITE);
++    if (copied)
++    {
++        copied = gst_video_frame_copy(&dst, &src);
++        gst_video_frame_unmap(&dst);
++    }
++    gst_video_frame_unmap(&src);
++    gst_buffer_unref(out);
++    gst_buffer_unref(buffer);
++    return copied ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
++
++too_small:
++    gst_buffer_unref(buffer);
++    return STATUS_BUFFER_TOO_SMALL;
++}
++
++NTSTATUS wg_camera_destroy(void *args)
++{
++    struct wg_camera *camera = get_camera(*(wg_camera_t *)args);
++
++    stop_pipeline(camera);
++    if (camera->out_caps)
++        gst_caps_unref(camera->out_caps);
++    free_modes(&camera->device);
++    g_cond_clear(&camera->cond);
++    g_mutex_clear(&camera->lock);
++    free(camera);
++    return STATUS_SUCCESS;
++}
+diff --git a/dlls/winegstreamer/wg_parser.c b/dlls/winegstreamer/wg_parser.c
+index b3d5bbc..e310c62 100644
+--- a/dlls/winegstreamer/wg_parser.c
++++ b/dlls/winegstreamer/wg_parser.c
+@@ -1993,6 +1993,15 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     X(wg_muxer_push_sample),
+     X(wg_muxer_read_data),
+     X(wg_muxer_finalize),
++
++    X(wg_camera_enum),
++    X(wg_camera_get_device),
++    X(wg_camera_create),
++    X(wg_camera_destroy),
++    X(wg_camera_get_mode),
++    X(wg_camera_start),
++    X(wg_camera_stop),
++    X(wg_camera_read),
+ };
+ 
+ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_wg_funcs_count);
+@@ -2390,6 +2399,15 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+     X64(wg_muxer_push_sample),
+     X64(wg_muxer_read_data),
+     X(wg_muxer_finalize),
++
++    X(wg_camera_enum),
++    X(wg_camera_get_device),
++    X(wg_camera_create),
++    X(wg_camera_destroy),
++    X(wg_camera_get_mode),
++    X(wg_camera_start),
++    X(wg_camera_stop),
++    X(wg_camera_read),
+ };
+ 
+ C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_wg_funcs_count);
+diff --git a/dlls/winegstreamer/winegstreamer.spec b/dlls/winegstreamer/winegstreamer.spec
+index 0df88d7..39206ad 100644
+--- a/dlls/winegstreamer/winegstreamer.spec
++++ b/dlls/winegstreamer/winegstreamer.spec
+@@ -5,3 +5,5 @@
+ @ stdcall winegstreamer_create_wm_sync_reader(ptr ptr)
+ @ stdcall winegstreamer_create_video_decoder(ptr)
+ @ stdcall winegstreamer_create_wma_decoder(ptr ptr ptr)
++@ stdcall winegstreamer_enum_video_capture(ptr ptr ptr)
++@ stdcall winegstreamer_create_video_capture_source(wstr ptr)

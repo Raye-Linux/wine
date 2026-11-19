@@ -19,6 +19,7 @@ Run by `build.sh` before it builds anything, and by
 | `test_package.py` | 25 | Store packages (.msix, .appx, bundles): what runs, what is refused, safe unpacking |
 | `test_proton_parity.py` | 4 | WINE_LARGE_ADDRESS_AWARE gives 32-bit programs 4 GB |
 | `test_file_dialog.py` | 30 | Open, Save and folder dialogs go to the desktop's own dialog; when the old one stays |
+| `test_camera.py` | 15 | cameras in Media Foundation (from GStreamer, the formats they give, 32-bit entries), the qcap fixes, the probe |
 
 ## The gaps, named
 
@@ -47,6 +48,13 @@ a failure would look like if it happened.
   `deps-check.exe` / `deps-check32.exe` say which Windows pieces (D3DX,
   XAudio2, XInput, MSXML, VB6, MFC, OpenAL, PhysX, .NET) load in a space.
   Both need a real PC for gamepads, MIDI and cameras.
+- **Cameras.** `test_camera.py` reads the patches; `tests/samples/cam-check.exe`
+  (and `cam-check32.exe`) lists the cameras DirectShow and Media Foundation
+  see and reads frames through a source reader, in each format, by symbolic
+  link, converted to RGB32, and across a stop and restart.
+  `WINE_GST_TEST_CAMERA="Test Camera"` adds a test pattern camera, so the Media
+  Foundation path runs on a machine without one; real cameras and DirectShow
+  need a real PC.
 - **`audio/measure.sh`** and the Direct3D / sound sample programs under
   `tests/samples/`: by hand, in the test VM, per the app list in
   the design notes of the iso repository.

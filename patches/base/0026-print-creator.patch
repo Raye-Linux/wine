@@ -1,0 +1,18 @@
+Subject: wineps: name Raye as the creator of what it prints
+
+The creator line of the PostScript ends up as the "Creator" of every PDF
+made by the Print to PDF printer, where any PDF viewer shows it.
+---
+diff --git a/dlls/wineps.drv/ps.c b/dlls/wineps.drv/ps.c
+index 7a8feea..cfad0d5 100644
+--- a/dlls/wineps.drv/ps.c
++++ b/dlls/wineps.drv/ps.c
+@@ -52,7 +52,7 @@ static const char cups_collate_true[] = "%cupsJobTicket: collate=true\n";
+ static const char cups_ap_d_inputslot[] = "%cupsJobTicket: AP_D_InputSlot=\n"; /* intentionally empty value */
+ 
+ static const char psheader[] = /* title */
+-"%%%%Creator: Wine PostScript Driver\n"
++"%%%%Creator: Raye\n"
+ "%%%%Title: %s\n"
+ "%%%%BoundingBox: (atend)\n"
+ "%%%%Pages: (atend)\n"
